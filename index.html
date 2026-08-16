@@ -1202,7 +1202,7 @@
 // Versão do próprio código do site — aumenta a cada atualização enviada.
 // Serve para conferir rapidamente, olhando o rodapé do catálogo, se o
 // navegador está mesmo rodando a versão mais recente ou uma versão em cache.
-const VERSAO_SITE = 13;
+const VERSAO_SITE = 14;
 
 const NUMERO_WHATSAPP = "5579996862821"; // formato: 55 + DDD + número, só números
 
@@ -1595,12 +1595,17 @@ function valoresDoTipo(p, tipo){
 }
 
 // Verifica se "valor" pode ser escolhido para "tipo", dado o que já está selecionado nos outros tipos
+// Verifica se "valor" pode ser escolhido para "tipo". Respeita uma hierarquia fixa
+// (Cor → Tamanho → Voltagem): cada tipo só é restringido pelos tipos que vêm ANTES
+// dele nessa ordem — nunca pelos que vêm depois. Assim, a Cor nunca fica bloqueada
+// por causa do Tamanho/Voltagem já escolhidos, por exemplo.
 function valorDisponivel(p, tipo, valor, selecaoParcial){
   const chave = tipo.toLowerCase();
+  const indiceTipo = ATRIBUTOS_VARIACAO.indexOf(tipo);
   return p.combinacoes.some(c => {
     if(c[chave] !== valor) return false;
     for(const outroTipo of tiposAplicaveis(p)){
-      if(outroTipo === tipo) continue;
+      if(ATRIBUTOS_VARIACAO.indexOf(outroTipo) >= indiceTipo) continue; // só considera tipos anteriores
       const escolhido = selecaoParcial[outroTipo];
       if(escolhido && c[outroTipo.toLowerCase()] !== escolhido) return false;
     }
@@ -1645,11 +1650,14 @@ function preselecionarVariacoes(p){
   return selecao;
 }
 
+let imagensGaleriaModalAtual = []; // galeria completa da modal aberta: fotos de detalhe + de todas as variações
+
 function abrirDetalheProduto(id){
   const p = PRODUTOS.find(prod => prod.id === id);
   if(!p) return;
 
   produtoModalAtual = p;
+  imagensGaleriaModalAtual = montarGaleriaCompleta(p);
   indiceGaleriaAtual = 0;
   selecaoVariacaoAtual = p.combinacoes ? preselecionarVariacoes(p) : {};
 
@@ -1665,10 +1673,20 @@ function abrirDetalheProduto(id){
   document.getElementById("sobreposicao-produto").classList.add("ativa");
 }
 
+// Monta a lista completa de fotos: as de detalhe (Imagem/Imagem 2/Imagem 3) seguidas
+// das fotos de cada variação cadastrada (sem repetir link igual).
+function montarGaleriaCompleta(p){
+  const imgs = (p.imagens && p.imagens.length) ? [...p.imagens] : (p.imagem ? [p.imagem] : []);
+  if(p.combinacoes){
+    p.combinacoes.forEach(c => {
+      if(c.imagem && !imgs.includes(c.imagem)) imgs.push(c.imagem);
+    });
+  }
+  return imgs;
+}
+
 function imagensDoProdutoModal(){
-  const p = produtoModalAtual;
-  if(!p) return [];
-  return (p.imagens && p.imagens.length) ? p.imagens : (p.imagem ? [p.imagem] : []);
+  return imagensGaleriaModalAtual;
 }
 
 function renderFotoModalAtual(){
@@ -1766,15 +1784,12 @@ function aplicarSelecaoAtual(){
 
   const combo = encontrarCombinacao(p, selecaoVariacaoAtual);
   if(combo && combo.imagem){
-    if(!p.imagens) p.imagens = imagensDoProdutoModal();
-    let indice = p.imagens.indexOf(combo.imagem);
-    if(indice === -1){
-      p.imagens.push(combo.imagem);
-      indice = p.imagens.length - 1;
+    const indice = imagensGaleriaModalAtual.indexOf(combo.imagem);
+    if(indice !== -1){
+      indiceGaleriaAtual = indice;
+      renderFotoModalAtual();
+      renderGaleriaPontos();
     }
-    indiceGaleriaAtual = indice;
-    renderFotoModalAtual();
-    renderGaleriaPontos();
   }
 
   renderRodapeProdutoModal();
