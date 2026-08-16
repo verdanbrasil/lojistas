@@ -756,6 +756,7 @@
     display:flex;align-items:center;justify-content:center;
   }
   .btn-fechar-modal svg{width:16px;height:16px;}
+  .container-foto-modal{position:relative;}
   .foto-produto-modal{
     background:var(--grafite);
     border:1px solid var(--linha);
@@ -768,6 +769,24 @@
   }
   .foto-produto-modal .img-produto{object-fit:contain; background:#FFFFFF;}
   .foto-produto-modal svg{width:56px;height:56px;}
+  .seta-galeria{
+    position:absolute;
+    top:0;
+    bottom:16px; /* acompanha a margem inferior da foto, fica centralizada só na altura da imagem */
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    width:34px;
+    color:#FFFFFF;
+    font-size:26px;
+    line-height:1;
+    text-shadow:0 1px 4px rgba(0,0,0,0.6);
+    opacity:0.75;
+    z-index:2;
+  }
+  .seta-galeria:active{opacity:1;}
+  .seta-galeria-esquerda{left:0;}
+  .seta-galeria-direita{right:0;}
   .categoria-produto-modal{
     display:inline-block;
     background:var(--cobre-fundo);
@@ -1161,7 +1180,11 @@
       </button>
     </div>
     <div class="modal-previa-corpo">
-      <div class="foto-produto-modal" id="foto-produto-modal"></div>
+      <div class="container-foto-modal">
+        <div class="foto-produto-modal" id="foto-produto-modal"></div>
+        <button class="seta-galeria seta-galeria-esquerda" id="seta-galeria-esquerda" onclick="event.stopPropagation(); voltarGaleria();" aria-label="Foto anterior">&#8249;</button>
+        <button class="seta-galeria seta-galeria-direita" id="seta-galeria-direita" onclick="event.stopPropagation(); avancarGaleria();" aria-label="Próxima foto">&#8250;</button>
+      </div>
       <div class="galeria-pontos" id="galeria-pontos-modal"></div>
       <span class="categoria-produto-modal" id="categoria-produto-modal"></span>
       <h3 class="nome-produto-modal" id="nome-produto-modal"></h3>
@@ -1202,7 +1225,7 @@
 // Versão do próprio código do site — aumenta a cada atualização enviada.
 // Serve para conferir rapidamente, olhando o rodapé do catálogo, se o
 // navegador está mesmo rodando a versão mais recente ou uma versão em cache.
-const VERSAO_SITE = 14;
+const VERSAO_SITE = 15;
 
 const NUMERO_WHATSAPP = "5579996862821"; // formato: 55 + DDD + número, só números
 
@@ -1700,12 +1723,24 @@ function renderFotoModalAtual(){
     el.onclick = imgs.length > 1 ? avancarGaleria : null;
   }
   el.style.cursor = imgs.length > 1 ? "pointer" : "default";
+
+  const mostrarSetas = imgs.length > 1 ? "flex" : "none";
+  document.getElementById("seta-galeria-esquerda").style.display = mostrarSetas;
+  document.getElementById("seta-galeria-direita").style.display = mostrarSetas;
 }
 
 function avancarGaleria(){
   const imgs = imagensDoProdutoModal();
   if(imgs.length < 2) return;
   indiceGaleriaAtual = (indiceGaleriaAtual + 1) % imgs.length;
+  renderFotoModalAtual();
+  renderGaleriaPontos();
+}
+
+function voltarGaleria(){
+  const imgs = imagensDoProdutoModal();
+  if(imgs.length < 2) return;
+  indiceGaleriaAtual = (indiceGaleriaAtual - 1 + imgs.length) % imgs.length;
   renderFotoModalAtual();
   renderGaleriaPontos();
 }
