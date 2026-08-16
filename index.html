@@ -1316,7 +1316,8 @@ function normalizar(texto){
 /* =========================================================
    CARREGAR CATÁLOGO DA PLANILHA (CSV)
    ========================================================= */
-function analisarCSV(texto){
+function analisarCSV(texto, colunasEsperadas){
+  colunasEsperadas = colunasEsperadas || ["produto", "categoria"];
   // Parser simples de CSV, cobre campos entre aspas com vírgulas e quebras de linha internas.
   const linhas = [];
   let campo = "", linha = [], dentroAspas = false;
@@ -1342,10 +1343,10 @@ function analisarCSV(texto){
 
   // A planilha pode ter linhas de título/instrução antes do cabeçalho de verdade
   // (ex: "Catálogo de Produtos" no topo). Procura a linha que realmente contém
-  // as colunas esperadas, em vez de assumir que é sempre a primeira linha.
+  // as colunas esperadas para ESTA tabela específica, em vez de assumir que é
+  // sempre a primeira linha ou usar sempre as mesmas colunas de referência.
   let indiceCabecalho = linhas.findIndex(l =>
-    l.some(c => c.trim().toLowerCase() === "produto") &&
-    l.some(c => c.trim().toLowerCase() === "categoria")
+    colunasEsperadas.every(col => l.some(c => c.trim().toLowerCase() === col))
   );
   if(indiceCabecalho === -1) indiceCabecalho = 0; // não achou: tenta a primeira linha mesmo
 
@@ -1395,8 +1396,12 @@ function salvarCacheCatalogo(produtos){
 async function buscarComTimeout(url, tempoLimiteMs){
   const controlador = new AbortController();
   const timer = setTimeout(() => controlador.abort(), tempoLimiteMs);
+  // acrescenta um parâmetro variável na URL e desativa o cache do navegador,
+  // pra nunca pegar uma cópia antiga guardada localmente ou pelo Google
+  const separador = url.includes("?") ? "&" : "?";
+  const urlSemCache = `${url}${separador}_=${Date.now()}`;
   try{
-    return await fetch(url, { signal: controlador.signal });
+    return await fetch(urlSemCache, { signal: controlador.signal, cache: "no-store" });
   } finally {
     clearTimeout(timer);
   }
@@ -1410,7 +1415,7 @@ async function buscarCombinacoesDaPlanilha(){
     const resposta = await buscarComTimeout(URL_PLANILHA_VARIACOES_CSV, 8000);
     if(!resposta.ok) throw new Error("Falha ao buscar combinações");
     const texto = await resposta.text();
-    const linhas = analisarCSV(texto);
+    const linhas = analisarCSV(texto, ["cor", "tamanho"]);
 
     const porProduto = {};
     linhas.forEach(l => {
