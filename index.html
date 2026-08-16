@@ -1199,6 +1199,11 @@
 /* =========================================================
    CONFIGURAÇÃO — trocar aqui antes de publicar
    ========================================================= */
+// Versão do próprio código do site — aumenta a cada atualização enviada.
+// Serve para conferir rapidamente, olhando o rodapé do catálogo, se o
+// navegador está mesmo rodando a versão mais recente ou uma versão em cache.
+const VERSAO_SITE = 13;
+
 const NUMERO_WHATSAPP = "5579996862821"; // formato: 55 + DDD + número, só números
 
 /* =========================================================
@@ -1231,6 +1236,12 @@ const URL_PLANILHA_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQtRoW
 // ############################################################
 const URL_PLANILHA_VARIACOES_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQtRoWRwGSkxz_sk4vqisYmmofT-KVdJQ5-I0YsvVOC-9EYng22lsBDFIKqqmlIbw/pub?gid=72007437&single=true&output=csv";
 // ############################################################
+
+// Pasta padrão onde as fotos ficam guardadas no GitHub. Usada para montar o
+// link automaticamente a partir da coluna "Sub ID" da aba Combinações, sem
+// precisar colar o link inteiro em cada linha — só o nome do arquivo (com
+// extensão, ex: "1-1.png") já basta na coluna Sub ID.
+const URL_BASE_IMAGENS = "https://raw.githubusercontent.com/verdanbrasil/lojistas/main/imagens/";
 
 let PRODUTOS = [];
 let CATEGORIAS = ["Todas"];
@@ -1292,7 +1303,11 @@ function carregarCarrinho(){
   }catch(e){ return {}; }
 }
 function salvarCarrinho(){
-  localStorage.setItem("pedidos_carrinho", JSON.stringify(carrinho));
+  try{
+    localStorage.setItem("pedidos_carrinho", JSON.stringify(carrinho));
+  }catch(e){
+    // armazenamento indisponível (ex: modo privado) — segue sem salvar, sem travar a compra
+  }
 }
 
 function carregarPrefs(){
@@ -1302,15 +1317,33 @@ function carregarPrefs(){
   }catch(e){ return {}; }
 }
 function salvarPrefs(){
-  localStorage.setItem("pedidos_prefs", JSON.stringify({ modoVisualizacao, tamanhoVisualizacao, tema, ordenacao: ordenacaoAtual }));
+  try{
+    localStorage.setItem("pedidos_prefs", JSON.stringify({ modoVisualizacao, tamanhoVisualizacao, tema, ordenacao: ordenacaoAtual }));
+  }catch(e){
+    // armazenamento indisponível — segue sem salvar preferências, sem travar o site
+  }
+}
+
+// Escapa texto antes de inserir em innerHTML, evitando que caracteres como
+// <, >, & digitados pela cliente (nome, endereço, busca) quebrem a tela ou
+// sejam interpretados como código.
+function escapeHtml(texto){
+  if(texto === null || texto === undefined) return "";
+  return String(texto)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function formatarPreco(valor){
-  return valor.toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
+  const n = Number(valor);
+  return (isNaN(n) ? 0 : n).toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
 }
 
 function normalizar(texto){
-  return texto.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+  return String(texto || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 }
 
 /* =========================================================
@@ -1362,7 +1395,12 @@ function analisarCSV(texto, colunasEsperadas){
 
 function paraNumero(texto){
   if(!texto) return 0;
-  const limpo = texto.replace(/[^\d,.-]/g, "").replace(",", ".");
+  let limpo = String(texto).replace(/[^\d,.-]/g, "");
+  // Formato brasileiro: ponto separa milhar, vírgula separa decimal (ex: "1.234,56").
+  // Se houver vírgula, remove todos os pontos antes (milhar) e troca a vírgula por ponto decimal.
+  if(limpo.includes(",")){
+    limpo = limpo.replace(/\./g, "").replace(",", ".");
+  }
   const n = parseFloat(limpo);
   return isNaN(n) ? 0 : n;
 }
@@ -1372,12 +1410,14 @@ function paraSimNao(texto){
 }
 
 const CHAVE_CACHE_CATALOGO = "verdan_catalogo_cache";
+const VERSAO_CACHE_CATALOGO = 3; // aumentar sempre que a estrutura OU o cálculo dos dados do catálogo mudar
 
 function carregarCacheCatalogo(){
   try{
     const salvo = localStorage.getItem(CHAVE_CACHE_CATALOGO);
     if(!salvo) return null;
     const dados = JSON.parse(salvo);
+    if(dados.versao !== VERSAO_CACHE_CATALOGO) return null; // cache de uma versão antiga do site: descarta
     if(!Array.isArray(dados.produtos) || dados.produtos.length === 0) return null;
     return dados;
   }catch(e){
@@ -1387,7 +1427,7 @@ function carregarCacheCatalogo(){
 
 function salvarCacheCatalogo(produtos){
   try{
-    localStorage.setItem(CHAVE_CACHE_CATALOGO, JSON.stringify({ produtos, salvoEm: Date.now() }));
+    localStorage.setItem(CHAVE_CACHE_CATALOGO, JSON.stringify({ produtos, salvoEm: Date.now(), versao: VERSAO_CACHE_CATALOGO }));
   }catch(e){
     // armazenamento indisponível (ex: modo privado) — segue sem cache, sem travar o app
   }
@@ -1423,13 +1463,18 @@ async function buscarCombinacoesDaPlanilha(){
       if(!idProduto) return;
 
       const disponivelTexto = (l["disponível?"] || l["disponivel?"] || l["disponível"] || l["disponivel"] || "sim").trim().toLowerCase();
+      const imagemDireta = (l["imagem da cor (url)"] || l["imagem da opção (url)"] || l["imagem"] || "").trim();
+      const subId = (l["sub id"] || "").trim();
+      // Se a coluna de imagem estiver vazia mas tiver Sub ID preenchido, monta o link
+      // sozinho a partir da pasta padrão configurada (URL_BASE_IMAGENS + nome do arquivo).
+      const imagem = imagemDireta || (subId ? `${URL_BASE_IMAGENS}${subId}` : "");
       const combo = {
         cor: (l["cor"] || "").trim(),
         tamanho: (l["tamanho"] || "").trim(),
         voltagem: (l["voltagem"] || "").trim(),
         ajuste: paraNumero(l["ajuste de preço"] || l["ajuste de preco"] || l["ajuste"] || "0"),
         disponivel: disponivelTexto !== "não" && disponivelTexto !== "nao",
-        imagem: (l["imagem da cor (url)"] || l["imagem da opção (url)"] || l["imagem"] || "").trim(),
+        imagem,
       };
       // ignora linha sem nenhum atributo preenchido (linha em branco de sobra na planilha)
       if(!combo.cor && !combo.tamanho && !combo.voltagem) return;
@@ -1514,8 +1559,7 @@ function trocarPorIcone(elemento){
 
 function blocoFotoUrl(url, nomeAlt){
   if(url && url.trim()){
-    const alt = (nomeAlt || "").replace(/"/g, "&quot;");
-    return `<img src="${url.trim()}" alt="${alt}" class="img-produto" onerror="trocarPorIcone(this)">`;
+    return `<img src="${escapeHtml(url.trim())}" alt="${escapeHtml(nomeAlt)}" class="img-produto" onerror="trocarPorIcone(this)">`;
   }
   return iconeProduto();
 }
@@ -1682,7 +1726,7 @@ function renderVariacoesModal(){
             return `
               <button class="opcao-pagamento ${selecionado ? 'selecionada' : ''} ${disponivel ? '' : 'indisponivel'}"
                 ${disponivel ? `onclick="escolherVariacao('${tipo}', '${valorEscapado}')"` : 'disabled'}>
-                ${valor}${!disponivel ? ' · esgotado' : ''}
+                ${escapeHtml(valor)}${!disponivel ? ' · esgotado' : ''}
               </button>
             `;
           }).join("")}
@@ -1805,16 +1849,19 @@ function renderResumoVariacoesNoCarrinho(){
   el.innerHTML = `
     <div class="titulo-bloco">Já no seu pedido, nessas variações</div>
     <div class="lista-resumo-variacoes">
-      ${entradas.map(([chave, item]) => `
+      ${entradas.map(([chave, item]) => {
+        const chaveEscapada = chave.replace(/'/g, "\\'");
+        return `
         <div class="linha-resumo-variacao">
-          <span>${item.nome}</span>
+          <span>${escapeHtml(item.nome)}</span>
           <div class="controle-qtd controle-qtd-mini">
-            <button class="btn-qtd" onclick="ajustarQtdResumoModal('${chave}', -1)">−</button>
+            <button class="btn-qtd" onclick="ajustarQtdResumoModal('${chaveEscapada}', -1)">−</button>
             <span class="qtd-valor">${item.qtd}</span>
-            <button class="btn-qtd" onclick="ajustarQtdResumoModal('${chave}', 1)">+</button>
+            <button class="btn-qtd" onclick="ajustarQtdResumoModal('${chaveEscapada}', 1)">+</button>
           </div>
         </div>
-      `).join("")}
+      `;
+      }).join("")}
     </div>
   `;
 }
@@ -1862,9 +1909,12 @@ function definirOrdenacao(valor){
 
 function renderChipsCategoria(){
   const el = document.getElementById("chips-categoria");
-  el.innerHTML = CATEGORIAS.map(c => `
-    <button class="chip ${categoriaAtiva === c ? 'ativo' : ''}" onclick="definirCategoria('${c}')">${c}</button>
-  `).join("");
+  el.innerHTML = CATEGORIAS.map(c => {
+    const cEscapadaAtributo = c.replace(/'/g, "\\'");
+    return `
+    <button class="chip ${categoriaAtiva === c ? 'ativo' : ''}" onclick="definirCategoria('${cEscapadaAtributo}')">${escapeHtml(c)}</button>
+  `;
+  }).join("");
 }
 
 function definirBusca(valor){
@@ -1918,8 +1968,8 @@ function renderAvisoFiltro(qtdVisivel, qtdTotal){
   }
 
   const partes = [];
-  if(filtrandoCategoria) partes.push(`categoria "${categoriaAtiva}"`);
-  if(filtrandoBusca) partes.push(`busca "${textoBusca}"`);
+  if(filtrandoCategoria) partes.push(`categoria "${escapeHtml(categoriaAtiva)}"`);
+  if(filtrandoBusca) partes.push(`busca "${escapeHtml(textoBusca)}"`);
 
   aviso.style.display = "flex";
   aviso.innerHTML = `
@@ -1971,7 +2021,7 @@ function renderCatalogo(){
         <div class="item-lista ${qtd > 0 ? 'no-carrinho' : ''}">
           <div class="foto-produto" onclick="abrirDetalheProduto(${p.id})">${p.recomendado ? '<span class="selo-recomendado">Top</span>' : ''}${blocoFotoProduto(p)}</div>
           <div class="info-produto">
-            <div class="nome-produto" onclick="abrirDetalheProduto(${p.id})">${p.nome}</div>
+            <div class="nome-produto" onclick="abrirDetalheProduto(${p.id})">${escapeHtml(p.nome)}</div>
             <div class="preco-produto tabular">${formatarPreco(p.preco)}</div>
           </div>
           <div class="acao">
@@ -1999,7 +2049,7 @@ function renderCatalogo(){
     return `
       <div class="card-produto ${qtd > 0 ? 'no-carrinho' : ''}">
         <div class="foto-produto" onclick="abrirDetalheProduto(${p.id})">${p.recomendado ? '<span class="selo-recomendado">Top</span>' : ''}${blocoFotoProduto(p)}</div>
-        <div class="nome-produto" onclick="abrirDetalheProduto(${p.id})">${p.nome}</div>
+        <div class="nome-produto" onclick="abrirDetalheProduto(${p.id})">${escapeHtml(p.nome)}</div>
         <div class="preco-produto tabular">${formatarPreco(p.preco)}</div>
         ${p.combinacoes ? `
           <button class="btn-add" onclick="abrirDetalheProduto(${p.id})">Escolher opções</button>
@@ -2072,23 +2122,26 @@ function renderCarrinho(){
   checkout.style.display = "block";
   if(!pedidoRecemEnviado) document.getElementById("link-esvaziar").style.display = "block";
 
-  lista.innerHTML = itens.map(([chave, item]) => `
+  lista.innerHTML = itens.map(([chave, item]) => {
+    const chaveEscapada = chave.replace(/'/g, "\\'");
+    return `
     <div class="item-carrinho">
       <div class="foto-produto">${blocoFotoProduto(item)}</div>
       <div class="item-info">
-        <div class="item-nome">${item.nome}</div>
+        <div class="item-nome">${escapeHtml(item.nome)}</div>
         <div class="item-preco-unit tabular">${formatarPreco(item.preco)} cada · ${formatarPreco(item.qtd * item.preco)}</div>
         <div class="item-controles">
           <div class="controle-qtd" style="width:104px;">
-            <button class="btn-qtd" onclick="alterarQtd('${chave}', -1)">−</button>
+            <button class="btn-qtd" onclick="alterarQtd('${chaveEscapada}', -1)">−</button>
             <span class="qtd-valor">${item.qtd}</span>
-            <button class="btn-qtd" onclick="alterarQtd('${chave}', 1)">+</button>
+            <button class="btn-qtd" onclick="alterarQtd('${chaveEscapada}', 1)">+</button>
           </div>
-          <button class="item-remover" onclick="removerItem('${chave}')">Remover</button>
+          <button class="item-remover" onclick="removerItem('${chaveEscapada}')">Remover</button>
         </div>
       </div>
     </div>
-  `).join("");
+  `;
+  }).join("");
 
   document.getElementById("total-carrinho").textContent = formatarPreco(totalCarrinho());
 
@@ -2157,7 +2210,11 @@ function atualizarEndereco(campo, valor){
   renderCarrinho();
 }
 
+let ultimaRequisicaoEstado = 0; // evita que uma resposta antiga (de um estado já trocado) sobrescreva a mais nova
+
 async function escolherEstado(sigla){
+  const minhaRequisicao = ++ultimaRequisicaoEstado;
+
   endereco.estadoSigla = sigla;
   endereco.estadoNome = ESTADOS_BR.find(e => e.sigla === sigla)?.nome || "";
   endereco.cidade = "";
@@ -2181,17 +2238,20 @@ async function escolherEstado(sigla){
   renderCarrinho();
 
   try{
-    const resposta = await fetch(`https://servicodados.ibge.gov.br/api/v1/localidades/estados/${sigla}/municipios`);
+    const resposta = await buscarComTimeout(`https://servicodados.ibge.gov.br/api/v1/localidades/estados/${sigla}/municipios`, 8000);
+    if(minhaRequisicao !== ultimaRequisicaoEstado) return; // a pessoa já trocou de estado de novo: descarta esta resposta
     if(!resposta.ok) throw new Error("Falha ao buscar cidades");
     const cidades = await resposta.json();
+    if(minhaRequisicao !== ultimaRequisicaoEstado) return;
     wrapCidade.innerHTML = `
       <label for="campo-cidade">Cidade</label>
       <select id="campo-cidade" onchange="escolherCidade(this.value)">
         <option value="">Selecione a cidade</option>
-        ${cidades.map(c => `<option value="${c.nome}">${c.nome}</option>`).join("")}
+        ${cidades.map(c => `<option value="${escapeHtml(c.nome)}">${escapeHtml(c.nome)}</option>`).join("")}
       </select>
     `;
   }catch(e){
+    if(minhaRequisicao !== ultimaRequisicaoEstado) return;
     // Sem internet ou API fora do ar: deixa a pessoa digitar a cidade manualmente
     wrapCidade.innerHTML = `
       <label for="campo-cidade">Cidade</label>
@@ -2231,6 +2291,7 @@ function confirmarLimpezaCarrinho(){
   nomeCliente = "";
   endereco = { estadoSigla: "", estadoNome: "", cidade: "", bairro: "", rua: "", complemento: "" };
   pedidoRecemEnviado = false;
+  ultimaRequisicaoEstado++; // invalida qualquer busca de cidades do IBGE ainda em andamento
 
   document.getElementById("campo-nome").value = "";
   document.getElementById("campo-bairro").value = "";
@@ -2264,7 +2325,7 @@ function renderRodapeCatalogo(){
   const pad = n => String(n).padStart(2, "0");
   const dataFormatada = `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} às ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 
-  el.textContent = `Catálogo #${gerarIdDeData(d)} · atualizado em ${dataFormatada}`;
+  el.textContent = `Catálogo #${gerarIdDeData(d)} · atualizado em ${dataFormatada} · site v${VERSAO_SITE}`;
 }
 
 function gerarIdDeData(data){
@@ -2304,12 +2365,12 @@ function montarPreviaVisual(idPedido){
   const itens = Object.values(carrinho);
   const nomePagamento = FORMAS_PAGAMENTO.find(f => f.id === pagamentoEscolhido)?.nome || "—";
   let linhas = itens.map(item =>
-    `• ${item.qtd}x ${item.nome} — ${formatarPreco(item.qtd * item.preco)}`
+    `• ${item.qtd}x ${escapeHtml(item.nome)} — ${formatarPreco(item.qtd * item.preco)}`
   ).join("\n");
   let blocoEntrega = entregaEscolhida === "entregar"
-    ? `<b>Entrega</b>\n${endereco.estadoNome} · ${endereco.cidade}\nBairro: ${endereco.bairro}\nRua: ${endereco.rua}${endereco.complemento.trim() ? `\nComplemento: ${endereco.complemento}` : ""}`
+    ? `<b>Entrega</b>\n${escapeHtml(endereco.estadoNome)} · ${escapeHtml(endereco.cidade)}\nBairro: ${escapeHtml(endereco.bairro)}\nRua: ${escapeHtml(endereco.rua)}${endereco.complemento.trim() ? `\nComplemento: ${escapeHtml(endereco.complemento)}` : ""}`
     : `<b>Retirada no local</b>`;
-  return `<b>Novo pedido — Verdan</b>\nPedido: #${idPedido}\nCliente: ${nomeCliente}\n\n${linhas}\n\n<b>Total: ${formatarPreco(totalCarrinho())}</b>\nPagamento: ${nomePagamento}\n\n${blocoEntrega}`;
+  return `<b>Novo pedido — Verdan</b>\nPedido: #${idPedido}\nCliente: ${escapeHtml(nomeCliente)}\n\n${linhas}\n\n<b>Total: ${formatarPreco(totalCarrinho())}</b>\nPagamento: ${nomePagamento}\n\n${blocoEntrega}`;
 }
 
 function abrirPreviaEnvio(){
@@ -2423,6 +2484,11 @@ irPara("catalogo");
 
 // Busca a versão mais atual da planilha em segundo plano e atualiza a tela quando chegar
 carregarProdutosDaPlanilha().then(() => {
+  // se a categoria filtrada não existir mais no catálogo atualizado, volta para "Todas"
+  // em vez de deixar a pessoa presa vendo "nenhum produto encontrado" sem entender o motivo
+  if(categoriaAtiva !== "Todas" && !CATEGORIAS.includes(categoriaAtiva)){
+    categoriaAtiva = "Todas";
+  }
   renderChipsCategoria();
   renderCatalogo();
 });
