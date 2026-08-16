@@ -816,6 +816,16 @@
   .grupo-variacao:last-child{margin-bottom:0;}
   .opcoes-variacao{display:flex; flex-wrap:wrap; gap:8px;}
   .opcoes-variacao .opcao-pagamento{flex:0 0 auto; padding:9px 14px;}
+  .opcoes-variacao .opcao-pagamento.indisponivel{
+    opacity:0.4;
+    text-decoration:line-through;
+    cursor:not-allowed;
+  }
+  .btn-modal-confirmar:disabled{
+    background:var(--grafite-3);
+    color:var(--texto-suave);
+    cursor:not-allowed;
+  }
   .resumo-variacoes-carrinho{margin-top:18px; padding-top:16px; border-top:1px solid var(--linha);}
   .lista-resumo-variacoes{display:flex; flex-direction:column; gap:8px; margin-top:8px;}
   .linha-resumo-variacao{
@@ -1202,7 +1212,7 @@ const NUMERO_WHATSAPP = "5579996862821"; // formato: 55 + DDD + número, só nú
 // ###   COLE O LINK DA PLANILHA AQUI NA LINHA DE BAIXO:    ###
 // ###                                                      ###
 // ############################################################
-const URL_PLANILHA_CSV = "https://docs.google.com/spreadsheets/d/17vfdzchwFeds3yVPl7q7SXHetmYpQgDv/edit?usp=drive_link&ouid=100890792295977934280&rtpof=true&sd=true";
+const URL_PLANILHA_CSV = "https://docs.google.com/spreadsheets/d/183hezberMN8UaGLZ-7geIew9AECB9fwK/edit?usp=sharing&ouid=100890792295977934280&rtpof=true&sd=true";
 // ############################################################
 //
 // Enquanto esta linha estiver em branco (ou se a planilha não puder ser
@@ -1392,30 +1402,39 @@ async function buscarComTimeout(url, tempoLimiteMs){
   }
 }
 
-async function buscarVariacoesDaPlanilha(){
+const ATRIBUTOS_VARIACAO = ["Cor", "Tamanho", "Voltagem"]; // ordem fixa de exibição
+
+async function buscarCombinacoesDaPlanilha(){
   if(!URL_PLANILHA_VARIACOES_CSV) return {};
   try{
     const resposta = await buscarComTimeout(URL_PLANILHA_VARIACOES_CSV, 8000);
-    if(!resposta.ok) throw new Error("Falha ao buscar variações");
+    if(!resposta.ok) throw new Error("Falha ao buscar combinações");
     const texto = await resposta.text();
     const linhas = analisarCSV(texto);
 
-    const variacoesPorProduto = {};
+    const porProduto = {};
     linhas.forEach(l => {
       const idProduto = parseInt(l["id do produto"] || l["id"], 10);
-      const tipo = (l["tipo"] || "").trim();
-      const opcao = (l["opção"] || l["opcao"] || "").trim();
-      const ajuste = paraNumero(l["ajuste de preço"] || l["ajuste de preco"] || l["ajuste"] || "0");
-      const imagem = (l["imagem da opção (url)"] || l["imagem da opcao (url)"] || l["imagem"] || "").trim();
-      if(!idProduto || !tipo || !opcao) return;
+      if(!idProduto) return;
 
-      if(!variacoesPorProduto[idProduto]) variacoesPorProduto[idProduto] = {};
-      if(!variacoesPorProduto[idProduto][tipo]) variacoesPorProduto[idProduto][tipo] = [];
-      variacoesPorProduto[idProduto][tipo].push({ opcao, ajuste, imagem });
+      const disponivelTexto = (l["disponível?"] || l["disponivel?"] || l["disponível"] || l["disponivel"] || "sim").trim().toLowerCase();
+      const combo = {
+        cor: (l["cor"] || "").trim(),
+        tamanho: (l["tamanho"] || "").trim(),
+        voltagem: (l["voltagem"] || "").trim(),
+        ajuste: paraNumero(l["ajuste de preço"] || l["ajuste de preco"] || l["ajuste"] || "0"),
+        disponivel: disponivelTexto !== "não" && disponivelTexto !== "nao",
+        imagem: (l["imagem da cor (url)"] || l["imagem da opção (url)"] || l["imagem"] || "").trim(),
+      };
+      // ignora linha sem nenhum atributo preenchido (linha em branco de sobra na planilha)
+      if(!combo.cor && !combo.tamanho && !combo.voltagem) return;
+
+      if(!porProduto[idProduto]) porProduto[idProduto] = [];
+      porProduto[idProduto].push(combo);
     });
-    return variacoesPorProduto;
+    return porProduto;
   }catch(e){
-    console.warn("Não foi possível carregar as variações da planilha.", e);
+    console.warn("Não foi possível carregar as combinações de variação da planilha.", e);
     return {};
   }
 }
@@ -1436,9 +1455,9 @@ async function carregarProdutosDaPlanilha(){
   }
 
   try{
-    const [respostaCatalogo, variacoesPorProduto] = await Promise.all([
+    const [respostaCatalogo, combinacoesPorProduto] = await Promise.all([
       buscarComTimeout(URL_PLANILHA_CSV, 8000),
-      buscarVariacoesDaPlanilha(),
+      buscarCombinacoesDaPlanilha(),
     ]);
     if(!respostaCatalogo.ok) throw new Error("Falha ao buscar planilha");
     const texto = await respostaCatalogo.text();
@@ -1460,7 +1479,7 @@ async function carregarProdutosDaPlanilha(){
         descricao: l["descrição"] || l["descricao"] || "",
         imagens,
         imagem: imagens[0] || "", // mantido por compatibilidade com o cache antigo
-        variacoes: variacoesPorProduto[id] || null,
+        combinacoes: combinacoesPorProduto[id] || null,
       };
     }).filter(p => p.nome);
 
@@ -1508,26 +1527,73 @@ let produtoModalAtual = null;
 let indiceGaleriaAtual = 0;
 let selecaoVariacaoAtual = {};
 
-function calcularPrecoComVariacao(p, selecao){
-  if(!p.variacoes) return p.preco;
-  let total = p.preco;
-  Object.entries(p.variacoes).forEach(([tipo, opcoes]) => {
-    const opt = opcoes.find(o => o.opcao === selecao[tipo]);
-    if(opt) total += (opt.ajuste || 0);
+function tiposAplicaveis(p){
+  if(!p.combinacoes) return [];
+  return ATRIBUTOS_VARIACAO.filter(attr =>
+    p.combinacoes.some(c => (c[attr.toLowerCase()] || "") !== "")
+  );
+}
+
+function valoresDoTipo(p, tipo){
+  const chave = tipo.toLowerCase();
+  const vistos = new Set();
+  const valores = [];
+  p.combinacoes.forEach(c => {
+    const v = c[chave];
+    if(v && !vistos.has(v)){ vistos.add(v); valores.push(v); }
   });
-  return total;
+  return valores;
+}
+
+// Verifica se "valor" pode ser escolhido para "tipo", dado o que já está selecionado nos outros tipos
+function valorDisponivel(p, tipo, valor, selecaoParcial){
+  const chave = tipo.toLowerCase();
+  return p.combinacoes.some(c => {
+    if(c[chave] !== valor) return false;
+    for(const outroTipo of tiposAplicaveis(p)){
+      if(outroTipo === tipo) continue;
+      const escolhido = selecaoParcial[outroTipo];
+      if(escolhido && c[outroTipo.toLowerCase()] !== escolhido) return false;
+    }
+    return c.disponivel !== false;
+  });
+}
+
+// Acha a linha exata da planilha que corresponde à seleção completa atual
+function encontrarCombinacao(p, selecao){
+  if(!p.combinacoes) return null;
+  const tipos = tiposAplicaveis(p);
+  return p.combinacoes.find(c => tipos.every(tipo => c[tipo.toLowerCase()] === (selecao[tipo] || ""))) || null;
+}
+
+function calcularPrecoComVariacao(p, selecao){
+  const combo = encontrarCombinacao(p, selecao);
+  return p.preco + (combo ? (combo.ajuste || 0) : 0);
 }
 
 function nomeComVariacao(nomeBase, p, selecao){
-  if(!p.variacoes) return nomeBase;
-  const partes = Object.keys(p.variacoes).map(tipo => `${tipo}: ${selecao[tipo]}`);
-  return partes.length ? `${nomeBase} (${partes.join(", ")})` : nomeBase;
+  const tipos = tiposAplicaveis(p);
+  if(tipos.length === 0) return nomeBase;
+  const partes = tipos.map(tipo => `${tipo}: ${selecao[tipo]}`);
+  return `${nomeBase} (${partes.join(", ")})`;
 }
 
 function chaveCarrinho(idProduto, p, selecao){
-  if(!p.variacoes) return String(idProduto);
-  const partes = Object.keys(p.variacoes).sort().map(tipo => `${tipo}=${selecao[tipo]}`);
+  const tipos = tiposAplicaveis(p);
+  if(tipos.length === 0) return String(idProduto);
+  const partes = tipos.slice().sort().map(tipo => `${tipo}=${selecao[tipo]}`);
   return `${idProduto}::${partes.join(",")}`;
+}
+
+// Pré-seleciona, em cascata, a primeira combinação válida e disponível que existir
+function preselecionarVariacoes(p){
+  const selecao = {};
+  tiposAplicaveis(p).forEach(tipo => {
+    const candidatos = valoresDoTipo(p, tipo);
+    const escolhido = candidatos.find(v => valorDisponivel(p, tipo, v, selecao));
+    if(escolhido) selecao[tipo] = escolhido;
+  });
+  return selecao;
 }
 
 function abrirDetalheProduto(id){
@@ -1536,24 +1602,16 @@ function abrirDetalheProduto(id){
 
   produtoModalAtual = p;
   indiceGaleriaAtual = 0;
-
-  // pré-seleciona a primeira opção de cada tipo de variação, pra já poder adicionar direto
-  selecaoVariacaoAtual = {};
-  if(p.variacoes){
-    Object.keys(p.variacoes).forEach(tipo => {
-      if(p.variacoes[tipo].length) selecaoVariacaoAtual[tipo] = p.variacoes[tipo][0].opcao;
-    });
-  }
+  selecaoVariacaoAtual = p.combinacoes ? preselecionarVariacoes(p) : {};
 
   renderFotoModalAtual();
   renderGaleriaPontos();
   document.getElementById("categoria-produto-modal").textContent = p.categoria;
   document.getElementById("nome-produto-modal").textContent = p.nome;
-  document.getElementById("preco-produto-modal").textContent = formatarPreco(calcularPrecoComVariacao(p, selecaoVariacaoAtual));
   document.getElementById("descricao-produto-modal").textContent = p.descricao || "Descrição em breve.";
 
   renderVariacoesModal();
-  renderRodapeProdutoModal();
+  aplicarSelecaoAtual();
   renderResumoVariacoesNoCarrinho();
   document.getElementById("sobreposicao-produto").classList.add("ativa");
 }
@@ -1603,55 +1661,89 @@ function renderGaleriaPontos(){
 function renderVariacoesModal(){
   const el = document.getElementById("variacoes-produto-modal");
   const p = produtoModalAtual;
-  if(!p.variacoes){ el.innerHTML = ""; return; }
+  const tipos = tiposAplicaveis(p);
+  if(tipos.length === 0){ el.innerHTML = ""; return; }
 
-  el.innerHTML = Object.entries(p.variacoes).map(([tipo, opcoes]) => `
-    <div class="grupo-variacao">
-      <div class="titulo-bloco">${tipo}</div>
-      <div class="opcoes-variacao">
-        ${opcoes.map(o => `
-          <button class="opcao-pagamento" data-tipo="${tipo.replace(/"/g,'&quot;')}" data-opcao="${o.opcao.replace(/"/g,'&quot;')}" data-imagem="${(o.imagem||'').replace(/"/g,'&quot;')}" onclick="escolherVariacao(this)">
-            ${o.opcao}${o.ajuste ? ` (+${formatarPreco(o.ajuste)})` : ""}
-          </button>
-        `).join("")}
+  el.innerHTML = tipos.map(tipo => {
+    const candidatos = valoresDoTipo(p, tipo);
+    return `
+      <div class="grupo-variacao">
+        <div class="titulo-bloco">${tipo}</div>
+        <div class="opcoes-variacao">
+          ${candidatos.map(valor => {
+            const disponivel = valorDisponivel(p, tipo, valor, selecaoVariacaoAtual);
+            const selecionado = selecaoVariacaoAtual[tipo] === valor;
+            const valorEscapado = valor.replace(/'/g, "\\'");
+            return `
+              <button class="opcao-pagamento ${selecionado ? 'selecionada' : ''} ${disponivel ? '' : 'indisponivel'}"
+                ${disponivel ? `onclick="escolherVariacao('${tipo}', '${valorEscapado}')"` : 'disabled'}>
+                ${valor}${!disponivel ? ' · esgotado' : ''}
+              </button>
+            `;
+          }).join("")}
+        </div>
       </div>
-    </div>
-  `).join("");
-
-  // marca a opção selecionada de cada grupo
-  el.querySelectorAll("button[data-tipo]").forEach(btn => {
-    if(selecaoVariacaoAtual[btn.dataset.tipo] === btn.dataset.opcao){
-      btn.classList.add("selecionada");
-    }
-  });
+    `;
+  }).join("");
 }
 
-function escolherVariacao(botao){
-  selecaoVariacaoAtual[botao.dataset.tipo] = botao.dataset.opcao;
-  renderVariacoesModal();
-  document.getElementById("preco-produto-modal").textContent = formatarPreco(calcularPrecoComVariacao(produtoModalAtual, selecaoVariacaoAtual));
-  renderRodapeProdutoModal();
+function escolherVariacao(tipo, valor){
+  selecaoVariacaoAtual[tipo] = valor;
 
-  const imagemOpcao = botao.dataset.imagem;
-  if(imagemOpcao){
-    const p = produtoModalAtual;
+  // se essa escolha tornou alguma OUTRA seleção incompatível, limpa e re-preenche em cascata
+  const tipos = tiposAplicaveis(produtoModalAtual);
+  tipos.forEach(t => {
+    if(t === tipo) return;
+    const atual = selecaoVariacaoAtual[t];
+    if(atual && !valorDisponivel(produtoModalAtual, t, atual, selecaoVariacaoAtual)){
+      delete selecaoVariacaoAtual[t];
+    }
+  });
+  tipos.forEach(t => {
+    if(selecaoVariacaoAtual[t]) return;
+    const candidatos = valoresDoTipo(produtoModalAtual, t);
+    const escolhido = candidatos.find(v => valorDisponivel(produtoModalAtual, t, v, selecaoVariacaoAtual));
+    if(escolhido) selecaoVariacaoAtual[t] = escolhido;
+  });
+
+  renderVariacoesModal();
+  aplicarSelecaoAtual();
+}
+
+// Atualiza preço, foto (se a combinação tiver uma vinculada) e o rodapé, a partir da seleção atual
+function aplicarSelecaoAtual(){
+  const p = produtoModalAtual;
+  document.getElementById("preco-produto-modal").textContent = formatarPreco(calcularPrecoComVariacao(p, selecaoVariacaoAtual));
+
+  const combo = encontrarCombinacao(p, selecaoVariacaoAtual);
+  if(combo && combo.imagem){
     if(!p.imagens) p.imagens = imagensDoProdutoModal();
-    let indice = p.imagens.indexOf(imagemOpcao);
+    let indice = p.imagens.indexOf(combo.imagem);
     if(indice === -1){
-      p.imagens.push(imagemOpcao);
+      p.imagens.push(combo.imagem);
       indice = p.imagens.length - 1;
     }
     indiceGaleriaAtual = indice;
     renderFotoModalAtual();
     renderGaleriaPontos();
   }
+
+  renderRodapeProdutoModal();
 }
 
 function renderRodapeProdutoModal(){
   const p = produtoModalAtual;
+  const tipos = tiposAplicaveis(p);
+  const faltaEscolher = tipos.some(t => !selecaoVariacaoAtual[t]);
+  const rodape = document.getElementById("rodape-produto-modal");
+
+  if(tipos.length > 0 && faltaEscolher){
+    rodape.innerHTML = `<button class="btn-modal-confirmar" style="flex:1; text-decoration:none;" disabled>Escolha as opções acima</button>`;
+    return;
+  }
+
   const chave = chaveCarrinho(p.id, p, selecaoVariacaoAtual);
   const qtd = carrinho[chave]?.qtd || 0;
-  const rodape = document.getElementById("rodape-produto-modal");
 
   if(qtd > 0){
     rodape.innerHTML = `
@@ -1700,7 +1792,7 @@ function alterarQtdModal(delta){
 function renderResumoVariacoesNoCarrinho(){
   const el = document.getElementById("resumo-variacoes-carrinho");
   const p = produtoModalAtual;
-  if(!p || !p.variacoes){ el.innerHTML = ""; return; }
+  if(!p || !p.combinacoes){ el.innerHTML = ""; return; }
 
   const entradas = Object.entries(carrinho).filter(([, item]) => item.idProduto === p.id);
   if(entradas.length === 0){ el.innerHTML = ""; return; }
@@ -1869,7 +1961,7 @@ function renderCatalogo(){
   if(modoVisualizacao === "lista"){
     container.className = `lista-produtos tam-${tamanhoVisualizacao}`;
     container.innerHTML = produtos.map(p => {
-      const qtd = p.variacoes ? 0 : (carrinho[String(p.id)]?.qtd || 0);
+      const qtd = p.combinacoes ? 0 : (carrinho[String(p.id)]?.qtd || 0);
       return `
         <div class="item-lista ${qtd > 0 ? 'no-carrinho' : ''}">
           <div class="foto-produto" onclick="abrirDetalheProduto(${p.id})">${p.recomendado ? '<span class="selo-recomendado">Top</span>' : ''}${blocoFotoProduto(p)}</div>
@@ -1878,7 +1970,7 @@ function renderCatalogo(){
             <div class="preco-produto tabular">${formatarPreco(p.preco)}</div>
           </div>
           <div class="acao">
-            ${p.variacoes ? `
+            ${p.combinacoes ? `
               <button class="btn-add" onclick="abrirDetalheProduto(${p.id})">Escolher opções</button>
             ` : qtd > 0 ? `
               <div class="controle-qtd">
@@ -1898,13 +1990,13 @@ function renderCatalogo(){
 
   container.className = `grid-produtos tam-${tamanhoVisualizacao}`;
   container.innerHTML = produtos.map(p => {
-    const qtd = p.variacoes ? 0 : (carrinho[String(p.id)]?.qtd || 0);
+    const qtd = p.combinacoes ? 0 : (carrinho[String(p.id)]?.qtd || 0);
     return `
       <div class="card-produto ${qtd > 0 ? 'no-carrinho' : ''}">
         <div class="foto-produto" onclick="abrirDetalheProduto(${p.id})">${p.recomendado ? '<span class="selo-recomendado">Top</span>' : ''}${blocoFotoProduto(p)}</div>
         <div class="nome-produto" onclick="abrirDetalheProduto(${p.id})">${p.nome}</div>
         <div class="preco-produto tabular">${formatarPreco(p.preco)}</div>
-        ${p.variacoes ? `
+        ${p.combinacoes ? `
           <button class="btn-add" onclick="abrirDetalheProduto(${p.id})">Escolher opções</button>
         ` : qtd > 0 ? `
           <div class="controle-qtd">
