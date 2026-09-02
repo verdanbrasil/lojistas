@@ -855,13 +855,13 @@
     background:var(--grafite);
     border:1px solid var(--linha);
     border-radius:12px;
-    height:230px;
+    aspect-ratio:3/4; /* formato padrão de foto vertical do iPhone — sem faixas brancas */
     display:flex;align-items:center;justify-content:center;
     color:var(--aco);
     margin-bottom:16px;
     overflow:hidden;
   }
-  .foto-produto-modal .img-produto{object-fit:contain; background:#FFFFFF;}
+  .foto-produto-modal .img-produto{object-fit:cover; background:#FFFFFF;}
   .foto-produto-modal svg{width:56px;height:56px;}
   .seta-galeria{
     position:absolute;
@@ -1500,9 +1500,8 @@ function atualizarBloqueioDeRolagem(){
 }
 
 const FORMAS_PAGAMENTO = [
-  { id: "pix", nome: "PIX", desconto: 0.05 },
-  { id: "dinheiro", nome: "Dinheiro", desconto: 0.05 },
-  { id: "cartao", nome: "Cartão" },
+  { id: "pix", nome: "PIX" },
+  { id: "dinheiro", nome: "Dinheiro" },
 ];
 
 /* =========================================================
