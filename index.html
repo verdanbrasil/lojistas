@@ -1417,7 +1417,7 @@
 // Versão do próprio código do site — aumenta a cada atualização enviada.
 // Serve para conferir rapidamente, olhando o rodapé do catálogo, se o
 // navegador está mesmo rodando a versão mais recente ou uma versão em cache.
-const VERSAO_SITE = 18; // continuação da numeração do site original da Verdan (estava na v17)
+const VERSAO_SITE = 19; // continuação da numeração do site original da Verdan (estava na v17)
 
 let NUMERO_WHATSAPP = "5579998390222"; // formato: 55 + DDD + número, só números — usado só até a planilha carregar (se ela tiver uma célula "WhatsApp:", o valor de lá assume o lugar deste)
 
@@ -1454,10 +1454,96 @@ const URL_PLANILHA_VARIACOES_CSV = "https://docs.google.com/spreadsheets/d/e/2PA
 
 // Pasta padrão onde as fotos ficam guardadas no GitHub. Usada para montar o
 // link automaticamente a partir da coluna "Sub ID" da aba Combinações, sem
-// precisar colar o link inteiro em cada linha — só o nome do arquivo (com
-// extensão, ex: "1-1.png") já basta na coluna Sub ID.
-// PLACEHOLDER: trocar pelo repositório GitHub real do projeto Malibu / La Vertuan
+// precisar colar o link inteiro em cada linha — só o nome do arquivo basta,
+// com ou sem extensão (ex: "1-1.png" ou "1-1"). Vale também para as colunas
+// Imagem (URL) a Imagem 5 (URL) da aba de catálogo.
+// Repositório real da Verdan (verdanbrasil/lojistas).
 const URL_BASE_IMAGENS = "https://raw.githubusercontent.com/verdanbrasil/lojistas/main/imagens/";
+// Lista dos arquivos da pasta "imagens" (API pública do GitHub). Serve para achar o
+// arquivo certo quando a planilha traz só o nome, com ou sem extensão (ex: "11-1"
+// encontra "11-1.jpg"), sem diferenciar maiúsculas. Se a API falhar, o site segue
+// montando o link com o nome digitado (e ".png" quando não tiver extensão).
+const URL_LISTA_IMAGENS = "https://api.github.com/repos/verdanbrasil/lojistas/contents/imagens";
+const CHAVE_CACHE_LISTA_IMAGENS = "verdan-lista-imagens";
+let MAPA_IMAGENS = {};
+let PROMESSA_LISTA_IMAGENS = null;
+function garantirListaDeImagens(){
+  if(!PROMESSA_LISTA_IMAGENS) PROMESSA_LISTA_IMAGENS = carregarListaDeImagens();
+  return PROMESSA_LISTA_IMAGENS;
+}
+
+function chaveNomeImagem(nome){
+  return String(nome || "").trim().toLowerCase();
+}
+function semExtensao(nome){
+  return nome.replace(/\.[a-z0-9]{2,5}$/i, "");
+}
+
+async function carregarListaDeImagens(){
+  try{
+    const salvo = JSON.parse(localStorage.getItem(CHAVE_CACHE_LISTA_IMAGENS) || "null");
+    if(salvo && Date.now() - salvo.em < 30 * 60 * 1000){ MAPA_IMAGENS = salvo.mapa; return; }
+  }catch(e){}
+  try{
+    const controlador = new AbortController();
+    const timer = setTimeout(() => controlador.abort(), 5000);
+    const resposta = await fetch(URL_LISTA_IMAGENS, { signal: controlador.signal });
+    clearTimeout(timer);
+    if(!resposta.ok) return;
+    const arquivos = await resposta.json();
+    const mapa = {};
+    arquivos.filter(a => a.type === "file").forEach(a => {
+      mapa[chaveNomeImagem(a.name)] = a.name;
+      const base = chaveNomeImagem(semExtensao(a.name));
+      if(!mapa[base]) mapa[base] = a.name;
+    });
+    MAPA_IMAGENS = mapa;
+    try{ localStorage.setItem(CHAVE_CACHE_LISTA_IMAGENS, JSON.stringify({ em: Date.now(), mapa })); }catch(e){}
+  }catch(e){
+    console.warn("Não foi possível listar a pasta de imagens.", e);
+  }
+}
+
+// Transforma o que está na planilha em link de imagem:
+// - link completo (http...) é usado como está;
+// - só o nome do arquivo (ex: "1-1.png", "1-1" ou "imagens/1-1.png") vira link da pasta do repositório.
+function resolverImagem(valor){
+  const v = String(valor || "").trim();
+  if(!v) return "";
+  if(/^(https?:|data:)/i.test(v)) return v;
+  const nome = v.replace(/^\.?\/?(imagens\/)?/i, "");
+  const achado = MAPA_IMAGENS[chaveNomeImagem(nome)] || MAPA_IMAGENS[chaveNomeImagem(semExtensao(nome))];
+  const temExtensao = /\.[a-z0-9]{2,5}$/i.test(nome);
+  const arquivo = achado || (temExtensao ? nome : nome + ".png");
+  const link = URL_BASE_IMAGENS + arquivo.split("/").map(encodeURIComponent).join("/");
+  if(!achado && !temExtensao) LINKS_CHUTADOS.set(link, link.slice(0, -4));
+  return link;
+}
+
+// Se a lista da pasta não carregou e o nome veio sem extensão, o site chuta ".png".
+// Quando essa foto não existe, tenta as outras extensões antes de mostrar o ícone.
+const EXTENSOES_TENTATIVA = [".png", ".jpg", ".jpeg", ".webp", ".PNG", ".JPG"];
+const LINKS_CHUTADOS = new Map(); // link chutado -> link sem a extensão
+document.addEventListener("error", ev => {
+  const img = ev.target;
+  if(!img || img.tagName !== "IMG") return;
+  const src = img.getAttribute("src") || "";
+  const base = img.dataset.semExtensao || LINKS_CHUTADOS.get(src);
+  if(!base) return;
+  const proxima = EXTENSOES_TENTATIVA.indexOf(img.dataset.extensaoAtual || ".png") + 1;
+  if(proxima >= EXTENSOES_TENTATIVA.length) return;
+  ev.stopImmediatePropagation();
+  img.dataset.semExtensao = base;
+  img.dataset.extensaoAtual = EXTENSOES_TENTATIVA[proxima];
+  img.src = base + EXTENSOES_TENTATIVA[proxima];
+}, true);
+
+// Acha a coluna "Sub ID" mesmo escrita de outro jeito (SubID, Sub-ID, sub id, Sub_ID...).
+function valorSubId(linha){
+  const chave = Object.keys(linha).find(k =>
+    k.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "") === "subid");
+  return chave ? (linha[chave] || "").trim() : "";
+}
 
 let PRODUTOS = [];
 let CATEGORIAS = ["Todas"];
@@ -1691,8 +1777,10 @@ function extrairCampoDoCSVPorRotulo(texto, rotulo){
 function extrairNumeroWhatsAppDoCSV(texto){
   const valor = extrairCampoDoCSVPorRotulo(texto, "whatsapp");
   if(!valor) return null;
-  const digitos = valor.replace(/\D/g, "");
-  return digitos.length >= 10 ? digitos : null; // ignora lixo/valor incompleto
+  let digitos = valor.replace(/\D/g, "");
+  // "(79) 99839-0222" vem sem o 55 do Brasil, que o link do WhatsApp exige
+  if(digitos.length === 10 || digitos.length === 11) digitos = "55" + digitos;
+  return digitos.length >= 12 ? digitos : null; // ignora lixo/valor incompleto
 }
 
 // Aceita "dd/mm/aaaa hh:mm:ss", "dd/mm/aaaa hh:mm" (formato padrão do Brasil no
@@ -1712,7 +1800,7 @@ function interpretarDataHoraBR(texto){
 }
 
 const CHAVE_CACHE_CATALOGO = "renata_almeida_catalogo_cache";
-const VERSAO_CACHE_CATALOGO = 4; // aumentar sempre que a estrutura OU o cálculo dos dados do catálogo mudar
+const VERSAO_CACHE_CATALOGO = 5; // aumentar sempre que a estrutura OU o cálculo dos dados do catálogo mudar
 
 function carregarCacheCatalogo(){
   try{
@@ -1758,6 +1846,7 @@ async function buscarCombinacoesDaPlanilha(){
     const resposta = await buscarComTimeout(URL_PLANILHA_VARIACOES_CSV, 8000);
     if(!resposta.ok) throw new Error("Falha ao buscar combinações");
     const texto = await resposta.text();
+    await garantirListaDeImagens();
     const linhas = analisarCSV(texto, ["cor", "tamanho"]);
 
     const porProduto = {};
@@ -1767,10 +1856,10 @@ async function buscarCombinacoesDaPlanilha(){
 
       const disponivelTexto = (l["disponível?"] || l["disponivel?"] || l["disponível"] || l["disponivel"] || "sim").trim().toLowerCase();
       const imagemDireta = (l["imagem da cor (url)"] || l["imagem da variação (url)"] || l["imagem da opção (url)"] || l["imagem"] || "").trim();
-      const subId = (l["sub id"] || "").trim();
+      const subId = valorSubId(l);
       // Se a coluna de imagem estiver vazia mas tiver Sub ID preenchido, monta o link
       // sozinho a partir da pasta padrão configurada (URL_BASE_IMAGENS + nome do arquivo).
-      const imagem = imagemDireta || (subId ? `${URL_BASE_IMAGENS}${subId}` : "");
+      const imagem = resolverImagem(imagemDireta || subId);
       const combo = {
         cor: (l["cor"] || "").trim(),
         tamanho: (l["tamanho"] || "").trim(),
@@ -1813,6 +1902,7 @@ async function carregarProdutosDaPlanilha(){
     const [respostaCatalogo, combinacoesPorProduto] = await Promise.all([
       buscarComTimeout(URL_PLANILHA_CSV, 8000),
       buscarCombinacoesDaPlanilha(),
+      garantirListaDeImagens(),
     ]);
     if(!respostaCatalogo.ok) throw new Error("Falha ao buscar planilha");
     const texto = await respostaCatalogo.text();
@@ -1838,7 +1928,7 @@ async function carregarProdutosDaPlanilha(){
         l["imagem 4 (url)"],
         l["imagem 5 (url)"],
       ]
-        .map(v => (v || "").trim())
+        .map(v => resolverImagem(v))
         .filter(v => v !== "");
 
       return {
@@ -3085,7 +3175,45 @@ configurarGestoDeSwipeGaleria();
 configurarGestosDeZoom();
 
 // Busca a versão mais atual da planilha em segundo plano e atualiza a tela quando chegar
+// O carrinho fica guardado no aparelho. Quando o catálogo atualizado chega, os preços e
+// nomes dos itens são refeitos a partir da planilha, para o pedido nunca sair com preço
+// antigo. Item que saiu do catálogo, ou variação que deixou de existir/ficou indisponível,
+// sai do carrinho.
+function atualizarCarrinhoComCatalogo(){
+  if(!catalogoCarregado) return;
+  let mudou = false;
+  Object.keys(carrinho).forEach(chave => {
+    const [idTexto, resto] = chave.split("::");
+    const p = PRODUTOS.find(x => String(x.id) === idTexto);
+    const selecao = {};
+    (resto || "").split(",").filter(Boolean).forEach(par => {
+      const i = par.indexOf("=");
+      selecao[par.slice(0, i)] = par.slice(i + 1);
+    });
+    let valido = !!p;
+    if(valido && tiposAplicaveis(p).length){
+      const combo = encontrarCombinacao(p, selecao);
+      valido = !!(combo && combo.disponivel) && chaveCarrinho(p.id, p, selecao) === chave;
+    } else if(valido && resto){
+      valido = false; // tinha variação e o produto não tem mais
+    }
+    if(!valido){ delete carrinho[chave]; mudou = true; return; }
+    const preco = calcularPrecoComVariacao(p, selecao);
+    const nome = nomeComVariacao(p.nome, p, selecao);
+    if(carrinho[chave].preco !== preco || carrinho[chave].nome !== nome){
+      carrinho[chave] = { ...carrinho[chave], preco, nome };
+      mudou = true;
+    }
+  });
+  if(mudou){
+    salvarCarrinho();
+    renderAbas();
+    if(document.getElementById("view-carrinho").classList.contains("ativo")) renderCarrinho();
+  }
+}
+
 carregarProdutosDaPlanilha().then(() => {
+  atualizarCarrinhoComCatalogo();
   // se a categoria/marca filtrada não existir mais no catálogo atualizado, volta para "Todas"
   // em vez de deixar a pessoa presa vendo "nenhum produto encontrado" sem entender o motivo
   if(categoriaAtiva !== "Todas" && !CATEGORIAS.includes(categoriaAtiva)){
