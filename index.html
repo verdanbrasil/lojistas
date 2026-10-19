@@ -1973,9 +1973,10 @@ function montarProdutosDoSupabase(itens){
       nome: (lista[0].grupo || "").trim() || primeiro.nome,
       categoria: primeiro.categoria || "Outros",
       preco: precoBase,
-      recomendado: false,
+      // Selos marcados no programa (Cadastros › Produtos): vale se qualquer variação do grupo estiver marcada.
+      recomendado: lista.some(v => v.destaque === true),
       novo: false,
-      ofertaEspecial: false,
+      ofertaEspecial: lista.some(v => v.oferta === true),
       descricao: (lista.find(v => v.descricao) || {}).descricao || "",
       imagens,
       imagem: imagens[0] || "",
