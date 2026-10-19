@@ -39,6 +39,13 @@
   button{font-family:inherit; cursor:pointer; border:none; background:none; color:inherit;}
   input, select, textarea{font-family:inherit; font-size:15px;}
 
+  .aviso-whatsapp{
+    margin:12px 16px 0; padding:10px 14px; border-radius:10px;
+    font-family:'Manrope', sans-serif; font-size:13px; line-height:1.4;
+    background:rgba(242,140,40,.12); border:1px solid rgba(242,140,40,.45); color:inherit;
+  }
+  .aviso-whatsapp.alerta{ background:rgba(220,60,60,.12); border-color:rgba(220,60,60,.5); }
+  .aviso-whatsapp b{ color:#F28C28; }
   header.top{
     padding:16px 20px;
     background:#0F2D1F;
@@ -243,6 +250,8 @@
     </div>
   </div>
 </header>
+
+<div id="aviso-whatsapp" class="aviso-whatsapp" hidden></div>
 
 <main>
 
@@ -958,6 +967,49 @@ async function salvarProduto(){
   document.getElementById("form-produto").style.display = "block"; // estado inicial: "Novo produto"
   buscarListaProdutos(); // já deixa o select de categorias pronto, mesmo sem entrar na aba de lista
 })();
+
+// ===== Aviso "WhatsApp ativo" =====
+// Mostra qual número está recebendo os pedidos do site agora. O site usa a célula
+// "WhatsApp:" da aba de catálogo (planilha publicada); sem ela, usa o número fixo do código.
+const URL_PLANILHA_CSV_SITE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQtRoWRwGSkxz_sk4vqisYmmofT-KVdJQ5-I0YsvVOC-9EYng22lsBDFIKqqmlIbw/pub?gid=1999753351&single=true&output=csv";
+const WHATSAPP_PADRAO_SITE = "5579998390222"; // o mesmo número fixo do index.html
+
+function formatarWhatsApp(digitos){
+  const m = digitos.match(/^55(\d{2})(\d{4,5})(\d{4})$/);
+  return m ? `(${m[1]}) ${m[2]}-${m[3]}` : digitos;
+}
+
+async function mostrarWhatsAppAtivo(){
+  const caixa = document.getElementById("aviso-whatsapp");
+  if(!caixa) return;
+  try{
+    const resposta = await fetch(`${URL_PLANILHA_CSV_SITE}&_=${Date.now()}`, { cache: "no-store" });
+    if(!resposta.ok) throw new Error("planilha indisponível");
+    const texto = await resposta.text();
+    let numero = null;
+    for(const linha of texto.split(/\r\n|\n|\r/)){
+      const campos = linha.split(",").map(c => c.replace(/^"|"$/g, "").trim());
+      const i = campos.findIndex(c => c.toLowerCase().startsWith("whatsapp"));
+      if(i >= 0 && campos[i + 1]){
+        let digitos = campos[i + 1].replace(/\D/g, "");
+        if(digitos.length === 10 || digitos.length === 11) digitos = "55" + digitos; // mesmo ajuste do site
+        if(digitos.length >= 12){ numero = digitos; break; }
+      }
+    }
+    if(numero){
+      caixa.innerHTML = `WhatsApp que recebe os pedidos do site: <b>${formatarWhatsApp(numero)}</b> (célula "WhatsApp:" da planilha).`;
+      caixa.classList.remove("alerta");
+    } else {
+      caixa.innerHTML = `A planilha não tem a célula "WhatsApp:". O site está usando o número fixo do código: <b>${formatarWhatsApp(WHATSAPP_PADRAO_SITE)}</b>.`;
+      caixa.classList.add("alerta");
+    }
+  }catch(e){
+    caixa.textContent = "Não consegui ler a planilha agora para conferir o WhatsApp dos pedidos.";
+    caixa.classList.add("alerta");
+  }
+  caixa.hidden = false;
+}
+mostrarWhatsAppAtivo();
 </script>
 </body>
 </html>
