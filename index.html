@@ -1417,7 +1417,7 @@
 // Versão do próprio código do site — aumenta a cada atualização enviada.
 // Serve para conferir rapidamente, olhando o rodapé do catálogo, se o
 // navegador está mesmo rodando a versão mais recente ou uma versão em cache.
-const VERSAO_SITE = 19; // continuação da numeração do site original da Verdan (estava na v17)
+const VERSAO_SITE = 20; // continuação da numeração do site original da Verdan (estava na v17)
 
 let NUMERO_WHATSAPP = "5579998390222"; // formato: 55 + DDD + número, só números — usado só até a planilha carregar (se ela tiver uma célula "WhatsApp:", o valor de lá assume o lugar deste)
 
@@ -1463,6 +1463,12 @@ const URL_BASE_IMAGENS = "https://raw.githubusercontent.com/verdanbrasil/lojista
 // arquivo certo quando a planilha traz só o nome, com ou sem extensão (ex: "11-1"
 // encontra "11-1.jpg"), sem diferenciar maiúsculas. Se a API falhar, o site segue
 // montando o link com o nome digitado (e ".png" quando não tiver extensão).
+// Catálogo do banco do programa (Supabase). Quando ele devolve produtos, o site usa
+// esses produtos; enquanto vier vazio (nenhum produto marcado "No site = Sim" no
+// programa), continua usando a planilha. A chave abaixo é a pública (só lê o catálogo).
+const URL_SUPABASE = "https://nyglymqlyjuyrhqslkzl.supabase.co";
+const CHAVE_PUBLICA_SUPABASE = "sb_publishable_v9H_BO1FR9mth3eKD7l9PQ_JXYpR42j";
+
 const URL_LISTA_IMAGENS = "https://api.github.com/repos/verdanbrasil/lojistas/contents/imagens";
 const CHAVE_CACHE_LISTA_IMAGENS = "verdan-lista-imagens";
 let MAPA_IMAGENS = {};
@@ -1800,7 +1806,7 @@ function interpretarDataHoraBR(texto){
 }
 
 const CHAVE_CACHE_CATALOGO = "renata_almeida_catalogo_cache";
-const VERSAO_CACHE_CATALOGO = 5; // aumentar sempre que a estrutura OU o cálculo dos dados do catálogo mudar
+const VERSAO_CACHE_CATALOGO = 6; // aumentar sempre que a estrutura OU o cálculo dos dados do catálogo mudar
 
 function carregarCacheCatalogo(){
   try{
@@ -1881,6 +1887,78 @@ async function buscarCombinacoesDaPlanilha(){
   }
 }
 
+async function buscarCatalogoDoSupabase(){
+  if(!URL_SUPABASE || !CHAVE_PUBLICA_SUPABASE) return [];
+  const controlador = new AbortController();
+  const timer = setTimeout(() => controlador.abort(), 8000);
+  try{
+    const resposta = await fetch(`${URL_SUPABASE}/rest/v1/rpc/catalogo_publico`, {
+      method: "POST",
+      headers: { "apikey": CHAVE_PUBLICA_SUPABASE, "Content-Type": "application/json" },
+      body: "{}",
+      signal: controlador.signal,
+      cache: "no-store",
+    });
+    if(!resposta.ok) throw new Error("Falha ao buscar o catálogo do Supabase");
+    const itens = await resposta.json();
+    await garantirListaDeImagens();
+    return montarProdutosDoSupabase(Array.isArray(itens) ? itens : []);
+  }catch(e){
+    console.warn("Não foi possível carregar o catálogo do Supabase.", e);
+    return [];
+  }finally{
+    clearTimeout(timer);
+  }
+}
+
+// No programa cada variação (cor/tamanho/voltagem) é um produto com código próprio.
+// Os que têm o mesmo "Grupo" viram um produto só no site, com as variações como opções.
+function montarProdutosDoSupabase(itens){
+  const grupos = new Map();
+  itens.forEach(item => {
+    const codigo = Number(item.codigo);
+    if(!codigo || !item.nome) return;
+    const chave = (item.grupo || "").trim().toLowerCase() || `#${codigo}`;
+    if(!grupos.has(chave)) grupos.set(chave, []);
+    grupos.get(chave).push({ ...item, codigo });
+  });
+
+  const produtos = [];
+  grupos.forEach(lista => {
+    lista.sort((a, b) => a.codigo - b.codigo);
+    const disponiveis = lista.filter(v => v.disponivel);
+    if(disponiveis.length === 0) return;
+    const fotosDe = v => String(v.fotos || "").split(",").map(f => f.trim()).filter(Boolean).map(resolverImagem);
+    const precos = disponiveis.map(v => Number(v.preco)).filter(n => n > 0);
+    const precoBase = precos.length ? Math.min(...precos) : 0;
+    const imagens = [...new Set(lista.flatMap(fotosDe))].slice(0, 5);
+    const temVariacao = lista.some(v => v.cor || v.tamanho || v.voltagem);
+    const combinacoes = temVariacao ? lista.map(v => ({
+      cor: (v.cor || "").trim(),
+      tamanho: (v.tamanho || "").trim(),
+      voltagem: (v.voltagem || "").trim(),
+      ajuste: Math.round(((Number(v.preco) || precoBase) - precoBase) * 100) / 100,
+      disponivel: !!v.disponivel,
+      imagem: fotosDe(v)[0] || "",
+    })).filter(c => c.cor || c.tamanho || c.voltagem) : null;
+    const primeiro = disponiveis[0];
+    produtos.push({
+      id: lista[0].codigo,
+      nome: (lista[0].grupo || "").trim() || primeiro.nome,
+      categoria: primeiro.categoria || "Outros",
+      preco: precoBase,
+      recomendado: false,
+      novo: false,
+      ofertaEspecial: false,
+      descricao: (lista.find(v => v.descricao) || {}).descricao || "",
+      imagens,
+      imagem: imagens[0] || "",
+      combinacoes: combinacoes && combinacoes.length ? combinacoes : null,
+    });
+  });
+  return produtos.filter(p => p.preco > 0);
+}
+
 async function carregarProdutosDaPlanilha(){
   // 1) Mostra imediatamente a última versão que funcionou, se houver, enquanto busca a atual
   const cache = carregarCacheCatalogo();
@@ -1899,13 +1977,15 @@ async function carregarProdutosDaPlanilha(){
   }
 
   try{
-    const [respostaCatalogo, combinacoesPorProduto] = await Promise.all([
-      buscarComTimeout(URL_PLANILHA_CSV, 8000),
+    const [respostaCatalogo, combinacoesPorProduto, , produtosDoSupabase] = await Promise.all([
+      buscarComTimeout(URL_PLANILHA_CSV, 8000).catch(e => { console.warn("Planilha indisponível.", e); return null; }),
       buscarCombinacoesDaPlanilha(),
       garantirListaDeImagens(),
+      buscarCatalogoDoSupabase(),
     ]);
-    if(!respostaCatalogo.ok) throw new Error("Falha ao buscar planilha");
-    const texto = await respostaCatalogo.text();
+    const planilhaOk = !!(respostaCatalogo && respostaCatalogo.ok);
+    if(!planilhaOk && produtosDoSupabase.length === 0) throw new Error("Falha ao buscar planilha");
+    const texto = planilhaOk ? await respostaCatalogo.text() : "";
     const linhas = analisarCSV(texto);
     // Valor BRUTO da célula B3 (ao lado de "Última atualização:") — é isso que
     // aparece no rodapé como "Catálogo #...", exatamente como está na planilha,
@@ -1919,7 +1999,7 @@ async function carregarProdutosDaPlanilha(){
       atualizarLinkWhatsappIndisponivel();
     }
 
-    const produtos = linhas.map((l, i) => {
+    const produtos = produtosDoSupabase.length > 0 ? produtosDoSupabase : linhas.map((l, i) => {
       const id = parseInt(l["id"], 10) || (i + 1);
       const imagens = [
         l["imagem"] || l["imagem (url)"],
