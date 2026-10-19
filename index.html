@@ -465,6 +465,7 @@
     cursor:pointer;
   }
   .foto-produto{cursor:pointer;}
+  .preco-varejo{font-size:12px; font-weight:600; opacity:.7; margin-top:2px;}
   .preco-produto{
     font-size:16px;
     font-weight:800;
@@ -1369,6 +1370,7 @@
       <h3 class="nome-produto-modal" id="nome-produto-modal"></h3>
       <div class="oferta-especial-modal" id="oferta-especial-modal" style="display:none;">Oferta especial</div>
       <div class="preco-produto-modal tabular" id="preco-produto-modal"></div>
+      <div class="preco-varejo tabular" id="preco-varejo-modal" hidden></div>
       <p class="descricao-produto-modal" id="descricao-produto-modal"></p>
       <div class="itens-kit-modal" id="itens-kit-modal"></div>
       <div class="variacoes-produto-modal" id="variacoes-produto-modal"></div>
@@ -1417,7 +1419,7 @@
 // Versão do próprio código do site — aumenta a cada atualização enviada.
 // Serve para conferir rapidamente, olhando o rodapé do catálogo, se o
 // navegador está mesmo rodando a versão mais recente ou uma versão em cache.
-const VERSAO_SITE = 20; // continuação da numeração do site original da Verdan (estava na v17)
+const VERSAO_SITE = 21; // continuação da numeração do site original da Verdan (estava na v17)
 
 let NUMERO_WHATSAPP = "5579998390222"; // formato: 55 + DDD + número, só números — usado só até a planilha carregar (se ela tiver uma célula "WhatsApp:", o valor de lá assume o lugar deste)
 
@@ -1806,7 +1808,7 @@ function interpretarDataHoraBR(texto){
 }
 
 const CHAVE_CACHE_CATALOGO = "renata_almeida_catalogo_cache";
-const VERSAO_CACHE_CATALOGO = 6; // aumentar sempre que a estrutura OU o cálculo dos dados do catálogo mudar
+const VERSAO_CACHE_CATALOGO = 7; // aumentar sempre que a estrutura OU o cálculo dos dados do catálogo mudar
 
 function carregarCacheCatalogo(){
   try{
@@ -1923,6 +1925,10 @@ function montarProdutosDoSupabase(itens){
     grupos.get(chave).push({ ...item, codigo });
   });
 
+  // Tabela de preço escolhida no programa (Cadastros › Empresa): "Atacado", "Varejo" ou "Os dois".
+  // "preco" é o que vai para o carrinho; com "Os dois" o site também mostra o varejo.
+  const tipoPreco = ["Atacado", "Varejo", "Os dois"].includes((itens[0] || {}).tipo_preco) ? itens[0].tipo_preco : "Atacado";
+  const varejoDe = v => tipoPreco === "Os dois" && Number(v.preco_varejo) > 0 ? Math.round(Number(v.preco_varejo) * 100) / 100 : null;
   const produtos = [];
   grupos.forEach(lista => {
     lista.sort((a, b) => a.codigo - b.codigo);
@@ -1940,7 +1946,9 @@ function montarProdutosDoSupabase(itens){
       ajuste: Math.round(((Number(v.preco) || precoBase) - precoBase) * 100) / 100,
       disponivel: !!v.disponivel,
       imagem: fotosDe(v)[0] || "",
+      precoVarejo: varejoDe(v),
     })).filter(c => c.cor || c.tamanho || c.voltagem) : null;
+    const varejos = disponiveis.map(varejoDe).filter(n => n > 0);
     const primeiro = disponiveis[0];
     produtos.push({
       id: lista[0].codigo,
@@ -1954,6 +1962,8 @@ function montarProdutosDoSupabase(itens){
       imagens,
       imagem: imagens[0] || "",
       combinacoes: combinacoes && combinacoes.length ? combinacoes : null,
+      tipoPreco,
+      precoVarejo: varejos.length ? Math.min(...varejos) : null,
     });
   });
   return produtos.filter(p => p.preco > 0);
@@ -2123,6 +2133,20 @@ function encontrarCombinacao(p, selecao){
 function calcularPrecoComVariacao(p, selecao){
   const combo = encontrarCombinacao(p, selecao);
   return p.preco + (combo ? (combo.ajuste || 0) : 0);
+}
+
+// Preço de varejo para mostrar ao lado do atacado (só quando o programa escolhe "Os dois").
+function precoVarejoComVariacao(p, selecao){
+  if(!p || !p.precoVarejo) return null;
+  const combo = encontrarCombinacao(p, selecao);
+  return (combo && combo.precoVarejo) || p.precoVarejo;
+}
+
+// Tabela de preço do pedido (vai na mensagem para o programa saber qual preço lançar).
+function tabelaDePrecoDoPedido(){
+  const comTipo = PRODUTOS.find(p => p.tipoPreco);
+  if(!comTipo) return "";
+  return comTipo.tipoPreco === "Varejo" ? "Varejo" : "Atacado";
 }
 
 function nomeComVariacao(nomeBase, p, selecao){
@@ -2449,6 +2473,10 @@ function escolherVariacao(tipo, valor){
 function aplicarSelecaoAtual(mudarGaleria = true){
   const p = produtoModalAtual;
   document.getElementById("preco-produto-modal").textContent = formatarPreco(calcularPrecoComVariacao(p, selecaoVariacaoAtual));
+  const varejoModal = precoVarejoComVariacao(p, selecaoVariacaoAtual);
+  const elVarejo = document.getElementById("preco-varejo-modal");
+  elVarejo.hidden = !varejoModal;
+  elVarejo.textContent = varejoModal ? `Preço de atacado · Varejo ${formatarPreco(varejoModal)}` : "";
 
   if(mudarGaleria){
     const combo = encontrarCombinacao(p, selecaoVariacaoAtual);
@@ -2725,7 +2753,7 @@ function renderCatalogo(){
           <div class="foto-produto" onclick="abrirDetalheProduto(${p.id})">${p.recomendado ? '<span class="selo-recomendado">Top</span>' : ''}${p.ofertaEspecial ? '<span class="selo-oferta">Oferta especial</span>' : ''}${blocoFotoProduto(p)}</div>
           <div class="info-produto">
             <div class="nome-produto" onclick="abrirDetalheProduto(${p.id})">${escapeHtml(p.nome)}</div>
-            <div class="preco-produto tabular">${formatarPreco(p.preco)}</div>
+            <div class="preco-produto tabular">${formatarPreco(p.preco)}</div>${p.precoVarejo ? `<div class="preco-varejo tabular">Varejo ${formatarPreco(p.precoVarejo)}</div>` : ""}
           </div>
           <div class="acao">
             ${p.combinacoes ? `
@@ -2753,7 +2781,7 @@ function renderCatalogo(){
       <div class="card-produto ${qtd > 0 ? 'no-carrinho' : ''}">
         <div class="foto-produto" onclick="abrirDetalheProduto(${p.id})">${p.recomendado ? '<span class="selo-recomendado">Top</span>' : ''}${p.ofertaEspecial ? '<span class="selo-oferta">Oferta especial</span>' : ''}${blocoFotoProduto(p)}</div>
         <div class="nome-produto" onclick="abrirDetalheProduto(${p.id})">${escapeHtml(p.nome)}</div>
-        <div class="preco-produto tabular">${formatarPreco(p.preco)}</div>
+        <div class="preco-produto tabular">${formatarPreco(p.preco)}</div>${p.precoVarejo ? `<div class="preco-varejo tabular">Varejo ${formatarPreco(p.precoVarejo)}</div>` : ""}
         ${p.combinacoes ? `
           <button class="btn-add" onclick="abrirDetalheProduto(${p.id})">Escolher opções</button>
         ` : qtd > 0 ? `
@@ -3066,7 +3094,9 @@ function montarMensagemWhatsapp(idPedido){
   const forma = formaPagamentoAtual();
   const nomePagamento = forma?.nome || "—";
   let msg = "*Novo pedido — Verdan*\n";
-  msg += `Pedido: #${idPedido}\n\n`;
+  msg += `Pedido: #${idPedido}\n`;
+  if(tabelaDePrecoDoPedido()) msg += `Tabela de preço: ${tabelaDePrecoDoPedido()}\n`;
+  msg += `\n`;
   msg += `Cliente: ${nomeCliente}\n\n`;
   itens.forEach(item => {
     msg += `• ${item.qtd}x ${item.nome} — ${formatarPreco(item.qtd * item.preco)}\n`;
@@ -3105,7 +3135,8 @@ function montarPreviaVisual(idPedido){
   const blocoPagamento = (forma && forma.desconto)
     ? `Subtotal: ${formatarPreco(totalCarrinho())}\n<b>Total com desconto (${Math.round(forma.desconto * 100)}%): ${formatarPreco(totalComDesconto())}</b>\nPagamento: ${escapeHtml(nomePagamento)}`
     : `<b>Total: ${formatarPreco(totalCarrinho())}</b>\nPagamento: ${escapeHtml(nomePagamento)}`;
-  return `<b>Novo pedido — Verdan</b>\nPedido: #${idPedido}\nCliente: ${escapeHtml(nomeCliente)}\n\n${linhas}\n\n${blocoPagamento}\n\n${blocoEntrega}`;
+  const linhaTabela = tabelaDePrecoDoPedido() ? `Tabela de preço: ${tabelaDePrecoDoPedido()}\n` : "";
+  return `<b>Novo pedido — Verdan</b>\nPedido: #${idPedido}\n${linhaTabela}Cliente: ${escapeHtml(nomeCliente)}\n\n${linhas}\n\n${blocoPagamento}\n\n${blocoEntrega}`;
 }
 
 function abrirPreviaEnvio(){
