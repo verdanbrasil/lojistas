@@ -1191,6 +1191,8 @@
 .grid-produtos.tam-pequeno .selo-recomendado,.grid-produtos.tam-pequeno .selo-oferta{top:6px;font-size:7px;padding:2px 5px}
 .grid-produtos.tam-pequeno .selo-recomendado{left:6px}.grid-produtos.tam-pequeno .selo-oferta{right:6px}
 @media(max-width:767px){.grid-produtos.tam-pequeno .selo-recomendado,.grid-produtos.tam-pequeno .selo-oferta{top:4px;font-size:6px;padding:1px 4px;letter-spacing:0}.grid-produtos.tam-pequeno .selo-recomendado{left:4px}.grid-produtos.tam-pequeno .selo-oferta{right:4px}}
+#opcoes-pagamento{grid-template-columns:repeat(3,minmax(0,1fr))}
+.opcao-pagamento.selecionada .aviso-acrescimo-cartao{color:#ffd9ad!important}.opcao-pagamento .aviso-acrescimo-cartao{line-height:1.3}
 </style></head>
 <body><a class="skip" href="#catalog-heading">Pular para os produtos</a>
 
@@ -1646,6 +1648,7 @@ function atualizarBloqueioDeRolagem(){
 const FORMAS_PAGAMENTO = [
   { id: "pix", nome: "PIX" },
   { id: "dinheiro", nome: "Dinheiro" },
+  { id: "boleto", nome: "Boleto", nota: "prazo a combinar", noPedido: "Boleto (prazo e crédito a combinar com a equipe)" },
 ];
 
 /* =========================================================
@@ -2883,7 +2886,7 @@ function renderCarrinho(){
   const opcoesEl = document.getElementById("opcoes-pagamento");
   opcoesEl.innerHTML = FORMAS_PAGAMENTO.map(f => `
     <button class="opcao-pagamento ${pagamentoEscolhido === f.id ? 'selecionada' : ''}" onclick="escolherPagamento('${f.id}')">
-      ${f.nome}${f.desconto ? `<span class="aviso-acrescimo-cartao">${Math.round(f.desconto * 100)}% de desconto</span>` : ''}
+      ${f.nome}${f.desconto ? `<span class="aviso-acrescimo-cartao">${Math.round(f.desconto * 100)}% de desconto</span>` : ''}${f.nota ? `<span class="aviso-acrescimo-cartao">${f.nota}</span>` : ''}
     </button>
   `).join("");
 
@@ -3078,7 +3081,7 @@ function gerarIdPedido(){
 function montarMensagemWhatsapp(idPedido){
   const itens = Object.values(carrinho);
   const forma = formaPagamentoAtual();
-  const nomePagamento = forma?.nome || "—";
+  const nomePagamento = forma?.noPedido || forma?.nome || "—";
   let msg = "*Novo pedido — Verdan*\n";
   msg += `Pedido: #${idPedido}\n`;
   if(tabelaDePrecoDoPedido()) msg += `Tabela de preço: ${tabelaDePrecoDoPedido()}\n`;
@@ -3111,7 +3114,7 @@ function montarMensagemWhatsapp(idPedido){
 function montarPreviaVisual(idPedido){
   const itens = Object.values(carrinho);
   const forma = formaPagamentoAtual();
-  const nomePagamento = forma?.nome || "—";
+  const nomePagamento = forma?.noPedido || forma?.nome || "—";
   let linhas = itens.map(item =>
     `• ${item.qtd}x ${escapeHtml(item.nome)} — ${formatarPreco(item.qtd * item.preco)}`
   ).join("\n");
