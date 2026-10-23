@@ -3318,17 +3318,16 @@ function atualizarCarrinhoComCatalogo(){
   }
 }
 
-// WhatsApp e e-mail vêm do programa (Cadastros › Empresa, função empresa_publica do banco).
+// WhatsApp vem do programa (Cadastros › Empresa, função empresa_publica do banco).
 // O que estiver vazio no programa continua com o valor fixo deste arquivo (ou o da planilha).
-let EMAIL_EMPRESA = "verdanbrasil@gmail.com";
+// Pedidos e orçamentos por e-mail vão para o comercial (os e-mails por setor ficam no site institucional).
+let EMAIL_EMPRESA = "comercial@verdanbrasil.com.br";
 let whatsappDoPrograma = false;
 function aplicarEmpresa(d){
   if(!d || typeof d !== "object") return;
   const z = String(d.EmpresaWhatsApp || "").replace(/\D/g, "");
   const numero = (z.length === 10 || z.length === 11) ? "55" + z : (/^55\d{10,11}$/.test(z) ? z : "");
   if(numero){ NUMERO_WHATSAPP = numero; whatsappDoPrograma = true; atualizarLinkWhatsappIndisponivel(); }
-  const email = String(d.EmpresaEmail || "").trim();
-  if(/^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$/.test(email)) EMAIL_EMPRESA = email;
 }
 try{ aplicarEmpresa(JSON.parse(localStorage.getItem("verdan_empresa_publica") || "null")); }catch(e){}
 fetch(`${URL_SUPABASE}/rest/v1/rpc/empresa_publica`, { method: "POST", headers: { apikey: CHAVE_PUBLICA_SUPABASE, "Content-Type": "application/json" }, body: "{}" })
