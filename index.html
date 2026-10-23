@@ -2005,6 +2005,7 @@ function montarProdutosDoSupabase(itens){
       cor: (v.cor || "").trim(),
       tamanho: (v.tamanho || "").trim(),
       voltagem: (v.voltagem || "").trim(),
+      codigo: v.codigo,
       ajuste: Math.round(((Number(v.preco) || precoBase) - precoBase) * 100) / 100,
       disponivel: !!v.disponivel,
       imagem: fotosDe(v)[0] || "",
@@ -2014,6 +2015,7 @@ function montarProdutosDoSupabase(itens){
     const primeiro = disponiveis[0];
     produtos.push({
       id: lista[0].codigo,
+      doPrograma: true, // id = código do produto no programa
       nome: (lista[0].grupo || "").trim() || primeiro.nome,
       categoria: primeiro.categoria || "Outros",
       preco: precoBase,
@@ -3088,8 +3090,21 @@ function gerarIdPedido(){
   return gerarIdDeData(new Date());
 }
 
+// Código do produto no programa (o nome no site pode ser diferente do nome do sistema).
+function codigoDoProgramaNoCarrinho(item, chave){
+  const [idTexto, resto] = String(chave || "").split("::");
+  const p = PRODUTOS.find(x => String(x.id) === idTexto);
+  if(!p || !p.doPrograma) return "";
+  if(!resto || !p.combinacoes) return String(p.id);
+  const selecao = {};
+  resto.split(",").filter(Boolean).forEach(par => { const i = par.indexOf("="); selecao[par.slice(0, i)] = par.slice(i + 1); });
+  const combo = encontrarCombinacao(p, selecao);
+  return combo && combo.codigo ? String(combo.codigo) : "";
+}
+
 function montarMensagemWhatsapp(idPedido){
   const itens = Object.values(carrinho);
+  const itensChaves = new Map(Object.entries(carrinho).map(([k, v]) => [v, k]));
   const forma = formaPagamentoAtual();
   const nomePagamento = forma?.noPedido || forma?.nome || "—";
   let msg = "*Novo pedido — Verdan*\n";
@@ -3098,7 +3113,8 @@ function montarMensagemWhatsapp(idPedido){
   msg += `\n`;
   msg += `Cliente: ${nomeCliente}\n\n`;
   itens.forEach(item => {
-    msg += `• ${item.qtd}x ${item.nome} — ${formatarPreco(item.qtd * item.preco)}\n`;
+    const cod = codigoDoProgramaNoCarrinho(item, itensChaves.get(item));
+    msg += `• ${item.qtd}x ${item.nome}${cod ? ` (cód. ${cod})` : ""} — ${formatarPreco(item.qtd * item.preco)}\n`;
   });
   if(forma && forma.desconto){
     msg += `\nSubtotal: ${formatarPreco(totalCarrinho())}`;
