@@ -1990,7 +1990,9 @@ function montarProdutosDoSupabase(itens){
   itens.forEach(item => {
     const codigo = Number(item.codigo);
     if(!codigo || !item.nome) return;
-    const chave = (item.grupo || "").trim().toLowerCase() || `#${codigo}`;
+    // Variação do mesmo produto no programa: mesmo "Pai" (código da principal); senão, mesmo Grupo.
+    const pai = Number(item.pai) || 0;
+    const chave = pai ? `pai:${pai}` : ((item.grupo || item.nome_base || "").trim().toLowerCase() || `#${codigo}`);
     if(!grupos.has(chave)) grupos.set(chave, []);
     grupos.get(chave).push({ ...item, codigo });
   });
@@ -2008,23 +2010,34 @@ function montarProdutosDoSupabase(itens){
     const precos = disponiveis.map(v => Number(v.preco)).filter(n => n > 0);
     const precoBase = precos.length ? Math.min(...precos) : 0;
     const imagens = [...new Set(lista.flatMap(fotosDe))].slice(0, 5);
-    const temVariacao = lista.some(v => v.cor || v.tamanho || v.voltagem);
+    // Tipos de variação: os do programa (livres, ex. Cor, Lado) ou, sem eles, Cor/Tamanho/Voltagem.
+    const opcoesDe = v => {
+      const livre = v.variacao && typeof v.variacao === "object" && !Array.isArray(v.variacao) ? v.variacao : null;
+      const o = {};
+      if(livre && Object.keys(livre).length) Object.entries(livre).forEach(([k, val]) => { const t = String(k).trim(), x = String(val ?? "").trim(); if(t && x) o[t] = x; });
+      else ATRIBUTOS_VARIACAO.forEach(t => { const x = String(v[t.toLowerCase()] || "").trim(); if(x) o[t] = x; });
+      return o;
+    };
+    const tiposVariacao = [];
+    lista.forEach(v => Object.keys(opcoesDe(v)).forEach(t => { if(!tiposVariacao.includes(t)) tiposVariacao.push(t); }));
+    // O banco não guarda a ordem dos tipos: Cor, Tamanho e Voltagem primeiro, depois os outros em ordem alfabética.
+    tiposVariacao.sort((a, b) => { const ia = ATRIBUTOS_VARIACAO.indexOf(a), ib = ATRIBUTOS_VARIACAO.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b, "pt-BR"); });
+    const temVariacao = tiposVariacao.length > 0;
     const combinacoes = temVariacao ? lista.map(v => ({
-      cor: (v.cor || "").trim(),
-      tamanho: (v.tamanho || "").trim(),
-      voltagem: (v.voltagem || "").trim(),
+      opcoes: opcoesDe(v),
       codigo: v.codigo,
       ajuste: Math.round(((Number(v.preco) || precoBase) - precoBase) * 100) / 100,
       disponivel: !!v.disponivel,
       imagem: fotosDe(v)[0] || "",
       precoVarejo: varejoDe(v),
-    })).filter(c => c.cor || c.tamanho || c.voltagem) : null;
+    })).filter(c => Object.keys(c.opcoes).length) : null;
     const varejos = disponiveis.map(varejoDe).filter(n => n > 0);
     const primeiro = disponiveis[0];
     produtos.push({
       id: lista[0].codigo,
+      tiposVariacao: temVariacao ? tiposVariacao : null,
       doPrograma: true, // id = código do produto no programa
-      nome: (lista[0].grupo || "").trim() || primeiro.nome,
+      nome: (lista[0].grupo || "").trim() || (lista.length > 1 && (lista[0].nome_base || "").trim()) || primeiro.nome,
       categoria: primeiro.categoria || "Outros",
       preco: precoBase,
       // Selos marcados no programa (Cadastros › Produtos): vale se qualquer variação do grupo estiver marcada.
@@ -2159,19 +2172,24 @@ let modalProdutoAbertoEm = 0; // timestamp de quando o modal foi aberto — usad
 // o que fazia a galeria pular direto pra segunda foto.
 let selecaoVariacaoAtual = {};
 
+// Valor de um tipo numa combinação: opções livres do programa ou os campos fixos da planilha.
+function valorCombo(c, tipo){
+  return (c.opcoes ? c.opcoes[tipo] : c[tipo.toLowerCase()]) || "";
+}
+function ordemTipos(p){ return (p && p.tiposVariacao) || ATRIBUTOS_VARIACAO; }
+
 function tiposAplicaveis(p){
   if(!p.combinacoes) return [];
-  return ATRIBUTOS_VARIACAO.filter(attr =>
-    p.combinacoes.some(c => (c[attr.toLowerCase()] || "") !== "")
+  return ordemTipos(p).filter(attr =>
+    p.combinacoes.some(c => valorCombo(c, attr) !== "")
   );
 }
 
 function valoresDoTipo(p, tipo){
-  const chave = tipo.toLowerCase();
   const vistos = new Set();
   const valores = [];
   p.combinacoes.forEach(c => {
-    const v = c[chave];
+    const v = valorCombo(c, tipo);
     if(v && !vistos.has(v)){ vistos.add(v); valores.push(v); }
   });
   return valores;
@@ -2183,14 +2201,14 @@ function valoresDoTipo(p, tipo){
 // dele nessa ordem — nunca pelos que vêm depois. Assim, a Cor nunca fica bloqueada
 // por causa do Tamanho/Voltagem já escolhidos, por exemplo.
 function valorDisponivel(p, tipo, valor, selecaoParcial){
-  const chave = tipo.toLowerCase();
-  const indiceTipo = ATRIBUTOS_VARIACAO.indexOf(tipo);
+  const ordem = ordemTipos(p);
+  const indiceTipo = ordem.indexOf(tipo);
   return p.combinacoes.some(c => {
-    if(c[chave] !== valor) return false;
+    if(valorCombo(c, tipo) !== valor) return false;
     for(const outroTipo of tiposAplicaveis(p)){
-      if(ATRIBUTOS_VARIACAO.indexOf(outroTipo) >= indiceTipo) continue; // só considera tipos anteriores
+      if(ordem.indexOf(outroTipo) >= indiceTipo) continue; // só considera tipos anteriores
       const escolhido = selecaoParcial[outroTipo];
-      if(escolhido && c[outroTipo.toLowerCase()] !== escolhido) return false;
+      if(escolhido && valorCombo(c, outroTipo) !== escolhido) return false;
     }
     return c.disponivel !== false;
   });
@@ -2200,7 +2218,7 @@ function valorDisponivel(p, tipo, valor, selecaoParcial){
 function encontrarCombinacao(p, selecao){
   if(!p.combinacoes) return null;
   const tipos = tiposAplicaveis(p);
-  return p.combinacoes.find(c => tipos.every(tipo => c[tipo.toLowerCase()] === (selecao[tipo] || ""))) || null;
+  return p.combinacoes.find(c => tipos.every(tipo => valorCombo(c, tipo) === (selecao[tipo] || ""))) || null;
 }
 
 function calcularPrecoComVariacao(p, selecao){
@@ -2796,7 +2814,7 @@ function renderCatalogo(){
  container.className=(modoVisualizacao==='lista'?'lista-produtos':'grid-produtos')+' tam-'+tamanhoVisualizacao;
  const action=p=>{const qtd=p.combinacoes?0:(carrinho[String(p.id)]?.qtd||0);if(p.combinacoes)return `<button class="btn-add" onclick="abrirDetalheProduto(${p.id})">Escolher opções <span class="plus"><svg class="seta" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17L17 7M8 7h9v9"/></svg></span></button>`;return qtd?`<div class="controle-qtd"><button class="btn-qtd" aria-label="Diminuir quantidade" onclick="alterarQtd(${p.id},-1)">−</button><span class="qtd-valor">${qtd}</span><button class="btn-qtd" aria-label="Aumentar quantidade" onclick="alterarQtd(${p.id},1)">+</button></div><div class="indicador-carrinho">No seu pedido ✓</div>`:`<button class="btn-add" onclick="alterarQtd(${p.id},1)">Adicionar <span class="plus">+</span></button>`};
  const photo=p=>`<div class="foto-produto${photoClass(p)}" role="button" tabindex="0" aria-label="Ver ${escapeHtml(p.nome)}" onclick="abrirDetalheProduto(${p.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();abrirDetalheProduto(${p.id})}">${p.ofertaEspecial?'<span class="selo-oferta">Oferta especial</span>':p.recomendado?'<span class="selo-recomendado">Seleção VERDAN</span>':''}${blocoFotoProduto(p)}${photoLabels(p)}</div>`;
- container.innerHTML=produtos.map(p=>{const qtd=p.combinacoes?Object.values(carrinho).filter(x=>x.idProduto===p.id).reduce((s,x)=>s+x.qtd,0):(carrinho[String(p.id)]?.qtd||0);const name=`<div class="nome-produto" tabindex="0" role="button" onclick="abrirDetalheProduto(${p.id})" onkeydown="if(event.key==='Enter'){abrirDetalheProduto(${p.id})}">${escapeHtml(p.nome)}</div>`;if(modoVisualizacao==='lista')return `<article class="item-lista ${qtd?'no-carrinho':''}">${photo(p)}<div class="info-produto"><div class="product-meta">${metaProduto(p)}</div>${name}<div class="preco-produto tabular">${formatarPreco(p.preco)}</div>${p.precoVarejo?`<div class="preco-varejo tabular">Varejo ${formatarPreco(p.precoVarejo)}</div>`:''}</div><div class="acao">${action(p)}</div></article>`;const nc=p.combinacoes?new Set(p.combinacoes.map(c=>c.cor).filter(Boolean)).size:0;return `<article class="card-produto ${qtd?'no-carrinho':''}">${photo(p)}<div class="product-copy"><div class="product-meta">${metaProduto(p)}</div>${name}<div class="preco-produto tabular">${formatarPreco(p.preco)}</div>${p.precoVarejo?`<div class="preco-varejo tabular">Varejo ${formatarPreco(p.precoVarejo)}</div>`:''}<div class="product-note">${p.combinacoes?(nc?nc+' cores · ':'')+'Escolha a combinação':p.novo?'Novo no catálogo':'Consulte os detalhes do produto'}</div><div class="product-bottom">${action(p)}</div></div></article>`}).join('');
+ container.innerHTML=produtos.map(p=>{const qtd=p.combinacoes?Object.values(carrinho).filter(x=>x.idProduto===p.id).reduce((s,x)=>s+x.qtd,0):(carrinho[String(p.id)]?.qtd||0);const name=`<div class="nome-produto" tabindex="0" role="button" onclick="abrirDetalheProduto(${p.id})" onkeydown="if(event.key==='Enter'){abrirDetalheProduto(${p.id})}">${escapeHtml(p.nome)}</div>`;if(modoVisualizacao==='lista')return `<article class="item-lista ${qtd?'no-carrinho':''}">${photo(p)}<div class="info-produto"><div class="product-meta">${metaProduto(p)}</div>${name}<div class="preco-produto tabular">${formatarPreco(p.preco)}</div>${p.precoVarejo?`<div class="preco-varejo tabular">Varejo ${formatarPreco(p.precoVarejo)}</div>`:''}</div><div class="acao">${action(p)}</div></article>`;const nc=p.combinacoes?new Set(p.combinacoes.map(c=>valorCombo(c,'Cor')).filter(Boolean)).size:0;return `<article class="card-produto ${qtd?'no-carrinho':''}">${photo(p)}<div class="product-copy"><div class="product-meta">${metaProduto(p)}</div>${name}<div class="preco-produto tabular">${formatarPreco(p.preco)}</div>${p.precoVarejo?`<div class="preco-varejo tabular">Varejo ${formatarPreco(p.precoVarejo)}</div>`:''}<div class="product-note">${p.combinacoes?(nc?nc+' cores · ':'')+'Escolha a combinação':p.novo?'Novo no catálogo':'Consulte os detalhes do produto'}</div><div class="product-bottom">${action(p)}</div></div></article>`}).join('');
 }
 
 function alterarQtd(chave, delta){
