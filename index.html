@@ -2012,7 +2012,8 @@ function montarProdutosDoSupabase(itens){
     const imagens = [...new Set(lista.flatMap(fotosDe))].slice(0, 5);
     // Tipos de variação: os do programa (livres, ex. Cor, Lado) ou, sem eles, Cor/Tamanho/Voltagem.
     const opcoesDe = v => {
-      const livre = v.variacao && typeof v.variacao === "object" && !Array.isArray(v.variacao) ? v.variacao : null;
+      let livre = v.variacao && typeof v.variacao === "object" && !Array.isArray(v.variacao) ? v.variacao : null;
+      if(typeof v.variacao_texto === "string"){ try{ const x = JSON.parse(v.variacao_texto); if(x && typeof x === "object" && !Array.isArray(x)) livre = x; }catch(e){} }
       const o = {};
       if(livre && Object.keys(livre).length) Object.entries(livre).forEach(([k, val]) => { const t = String(k).trim(), x = String(val ?? "").trim(); if(t && x) o[t] = x; });
       else ATRIBUTOS_VARIACAO.forEach(t => { const x = String(v[t.toLowerCase()] || "").trim(); if(x) o[t] = x; });
@@ -2020,12 +2021,13 @@ function montarProdutosDoSupabase(itens){
     };
     const tiposVariacao = [];
     lista.forEach(v => Object.keys(opcoesDe(v)).forEach(t => { if(!tiposVariacao.includes(t)) tiposVariacao.push(t); }));
-    // O banco não guarda a ordem dos tipos: Cor, Tamanho e Voltagem primeiro, depois os outros em ordem alfabética.
-    tiposVariacao.sort((a, b) => { const ia = ATRIBUTOS_VARIACAO.indexOf(a), ib = ATRIBUTOS_VARIACAO.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b, "pt-BR"); });
+    // Ordem dos tipos: a digitada no programa (variacao_texto). Sem ela, Cor, Tamanho e Voltagem primeiro, depois os outros em ordem alfabética.
+    if(!lista.some(v => typeof v.variacao_texto === "string")) tiposVariacao.sort((a, b) => { const ia = ATRIBUTOS_VARIACAO.indexOf(a), ib = ATRIBUTOS_VARIACAO.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b, "pt-BR"); });
     const temVariacao = tiposVariacao.length > 0;
     const combinacoes = temVariacao ? lista.map(v => ({
       opcoes: opcoesDe(v),
       codigo: v.codigo,
+      nomePrograma: String(v.nome || "").trim(), // nome completo da variação no programa (ex. Lanterna Lateral – Âmbar · LE)
       ajuste: Math.round(((Number(v.preco) || precoBase) - precoBase) * 100) / 100,
       disponivel: !!v.disponivel,
       imagem: fotosDe(v)[0] || "",
@@ -3117,7 +3119,7 @@ function gerarIdPedido(){
 }
 
 // Código do produto no programa (o nome no site pode ser diferente do nome do sistema).
-function codigoDoProgramaNoCarrinho(item, chave){
+function codigoDoProgramaNoCarrinho(item, chave, comNome){
   const [idTexto, resto] = String(chave || "").split("::");
   const p = PRODUTOS.find(x => String(x.id) === idTexto);
   if(!p || !p.doPrograma) return "";
@@ -3125,6 +3127,7 @@ function codigoDoProgramaNoCarrinho(item, chave){
   const selecao = {};
   resto.split(",").filter(Boolean).forEach(par => { const i = par.indexOf("="); selecao[par.slice(0, i)] = par.slice(i + 1); });
   const combo = encontrarCombinacao(p, selecao);
+  if(comNome) return combo || null;
   return combo && combo.codigo ? String(combo.codigo) : "";
 }
 
@@ -3140,7 +3143,9 @@ function montarMensagemWhatsapp(idPedido){
   msg += `Cliente: ${nomeCliente}\n\n`;
   itens.forEach(item => {
     const cod = codigoDoProgramaNoCarrinho(item, itensChaves.get(item));
-    msg += `• ${item.qtd}x ${item.nome}${cod ? ` (cód. ${cod})` : ""} — ${formatarPreco(item.qtd * item.preco)}\n`;
+    const combo = codigoDoProgramaNoCarrinho(item, itensChaves.get(item), true);
+    const nome = (combo && typeof combo === "object" && combo.nomePrograma) || item.nome;
+    msg += `• ${item.qtd}x ${nome}${cod ? ` (cód. ${cod})` : ""} — ${formatarPreco(item.qtd * item.preco)}\n`;
   });
   if(forma && forma.desconto){
     msg += `\nSubtotal: ${formatarPreco(totalCarrinho())}`;
